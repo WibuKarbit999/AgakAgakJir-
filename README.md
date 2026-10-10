@@ -1,5 +1,9 @@
 oh ya untuk full script botnya bisa download dari repo pembuatnya ya🗿👍
 
+# langkah Sebelum pakai ini
+Backup dulu jembut data botmu. soalnya banyak yang saya timpa😹
+di toolkit/set/config.json kena timpa full
+
 ---
 
 # AgakAgakJir-
@@ -364,7 +368,7 @@ harus sudah masuk ke dalam folder bot dulu ya
 kalau kalian pakai panel pterodactyl
 yaudah sih pakai ini aja di chat whatsapp dengan bot langsung
 ```bash
-cat > "/node_modules/@whiskeysockets/baileys/src/Voip/audio-feeder.js" <<'EOF'
+$ cat > "/node_modules/@whiskeysockets/baileys/src/Voip/audio-feeder.js" <<'EOF'
 /* Elaina Baileys maintained distribution. Upstream notices and license are preserved in LICENSE and NOTICE.md. */
 import { spawn } from 'node:child_process';
 const PREBUFFER_CHUNKS = 12;
