@@ -43,7 +43,7 @@
     "path": "^0.12.7",
     "qrcode": "^1.5.4",
     "request": "^2.88.2",
-    "sharp": "^0.35.4",
+    "sharp": "^0.35.4"
   },
   "devDependencies": {
     "prettier": "^3.6.1"
