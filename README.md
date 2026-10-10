@@ -8,4 +8,7 @@ https://github.com/rifza123/experimental-bell
 
 https://termai.cc
 
-yaudah itu doang
+# Peringatan ini ada beberapa file yang saya timpa
+Karena ini saya upload default dari yang aku pakai saat ini jadi beberapa harus di ubah
+
+
