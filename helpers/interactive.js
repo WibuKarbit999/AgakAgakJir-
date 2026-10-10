@@ -1,0 +1,1687 @@
+const { exec } = await 'child'.import();
+const { getContentType } = 'baileys'.import();
+const util = await 'util'.import();
+const _exec = util.promisify(exec);
+const fs = 'fs'.import();
+const moment = 'timezone'.import();
+const time = moment.tz('Asia/Jakarta').format('DD/MM HH:mm:ss');
+const { transcribe } = await (fol[2] + 'transcribe.js').r();
+const { ai } = await `${fol[2]}reasoner.js`.r();
+const exif = await (fol[0] + 'exif.js').r();
+
+const maxCommandExpired = 7000;
+let urls = {};
+
+export default async function In({ cht, Exp, store, is, ev, chatDb, sewaDb }) {
+  if (ev.dataEvents.size > 0 && Object.keys(urls).length == 0) {
+    for (const [key, event] of Object.entries(Data.events)) {
+      if (event.tag !== 'downloader') continue;
+      const formats = event?.urls?.formats;
+      if (!Array.isArray(formats)) continue;
+      for (const format of formats) {
+        urls[format] ??= key;
+      }
+    }
+  }
+
+  const { func } = Exp;
+  let { archiveMemories: memories, parseTimeString } = func;
+  let { sender } = cht;
+  try {
+    const commandExpired = memories.getItem(sender, 'commandExpired');
+    let isPendingCmd =
+      ['y', 'iy', 'iya', 'yakin', 'hooh', 'iye', 'iyh'].includes(
+        cht?.msg?.toLowerCase()
+      ) && Date.now() < commandExpired
+        ? memories.getItem(sender, 'command')
+        : false;
+    cht.msg = isPendingCmd ? isPendingCmd : cht.msg;
+    if (isPendingCmd) {
+      await memories.delItem(sender, 'command');
+      await memories.delItem(sender, 'commandExpired');
+    }
+    let quotedQuestionCmd = memories.getItem(sender, 'quotedQuestionCmd') || {};
+    let globalQuotedQ = Data.quotedQuestionCmd?.[cht?.quoted?.stanzaId];
+    let questionCmd =
+      quotedQuestionCmd[cht?.quoted?.stanzaId] ||
+      globalQuotedQ ||
+      memories.getItem(sender, 'questionCmd');
+    let isQuestionCmd =
+      questionCmd &&
+      cht.quoted &&
+      (quotedQuestionCmd[cht?.quoted?.stanzaId] ||
+        globalQuotedQ ||
+        String(cht.quoted.sender) === String(Exp.number))
+        ? questionCmd.accepts.some((i) => i == cht?.msg?.toLowerCase()?.trim()) ||
+          questionCmd.accepts.length < 1
+        : false;
+    if (isQuestionCmd) {
+      let expTime = questionCmd.exp || questionCmd.emit?.exp || 0;
+      if (expTime && Date.now() > expTime) {
+        if (globalQuotedQ) {
+          delete Data.quotedQuestionCmd[cht.quoted.stanzaId];
+        } else if (quotedQuestionCmd?.[cht?.quoted?.stanzaId]) {
+          delete quotedQuestionCmd[cht.quoted.stanzaId];
+          memories.setItem(sender, 'quotedQuestionCmd', quotedQuestionCmd);
+        } else {
+          memories.delItem(sender, 'questionCmd');
+        }
+        isQuestionCmd = false;
+      }
+    }
+    let isMsg =
+      !is?.cmd && !is?.me && !is?.baileys && cht.id !== 'status@broadcast';
+    let utSession = is.group
+      ? chatDb?.ulartangga || Data.ulartangga?.[cht.id]
+      : null;
+    let isUTPlaying = utSession && utSession.status === 'playing';
+    let isUTTurn =
+      isUTPlaying && cht.sender === utSession.players?.[utSession.gilir]?.id;
+    let isUTRollMsg =
+      isUTTurn &&
+      (['ðŸŽ²', 'dadu', '.dadu', 'roll', '.roll'].includes(
+        cht?.msg?.trim()?.toLowerCase()
+      ) ||
+        cht?.msg?.trim() === 'ðŸŽ²');
+    let isPendingDm = Boolean(
+      is.owner &&
+        Data.pendingDmSession &&
+        Date.now() < Data.pendingDmSession.exp &&
+        ['y', 'ya', 'yes', 'n', 'no', 'batal', 'cancel', 'accept', 'reject'].includes(
+          cht?.msg?.trim()?.toLowerCase()
+        )
+    );
+    let isActiveDm = Boolean(
+      is.owner &&
+        Data.activeDmSession?.active &&
+        !is?.group &&
+        !cht?.cmd
+    );
+    let quotedTicketMatch =
+      !is?.cmd &&
+      cht?.msg &&
+      cht?.quoted?.text &&
+      (cht.quoted.text.match(/UPDATE STATUS TIKET #(TCK-[A-Z0-9]+)/i) ||
+       cht.quoted.text.match(/DETAIL TIKET #(TCK-[A-Z0-9]+)/i) ||
+       cht.quoted.text.match(/TIKET BERHASIL DIBUAT[\s\S]*#(TCK-[A-Z0-9]+)/i) ||
+       cht.quoted.text.match(/#(TCK-[A-Z0-9]+)/i));
+
+    if (quotedTicketMatch && typeof global.updateTicketUser === 'function') {
+      let ticketId = quotedTicketMatch[1];
+      let replyText = (cht.msg || cht.text || '').trim();
+      if (replyText) {
+        try {
+          await global.updateTicketUser({
+            ticketId,
+            actionType: 'reply',
+            replyText
+          });
+          let successMsg = Data.infos?.ticketReplySuccess
+            ? Data.infos.ticketReplySuccess(ticketId)
+            : `ðŸ’¬ *Balasan tiket #${ticketId} berhasil dikirimkan ke tim pengembang.*`;
+          return cht.reply(successMsg);
+        } catch (e) {
+          return cht.reply(`âŒ *Gagal mengirim balasan tiket:* ${e.message}`);
+        }
+      }
+    }
+
+    let isEval = cht?.msg?.startsWith('>');
+    let isEvalSync = cht?.msg?.startsWith('=>');
+    let isExec = cht?.msg?.startsWith('$');
+    let danger = cht?.msg?.slice(2) || '';
+    const sanitized = danger.replace(/\s/g, '');
+    const dangerous = [
+      'rm-rf',
+      'rm-rf--no-preserve-root',
+      'mkfs',
+      'rm-f',
+      'rm-drf',
+      'wipe',
+      'shred',
+      'chmod-r777',
+      'chown',
+      'find/-name*.log-delete',
+      '/*',
+      '*.*',
+      '*',
+      '/.',
+      '/..',
+      '>/dev/null',
+    ];
+
+    const isDangerous =
+      dangerous.some((pattern) => sanitized.includes(pattern)) && !isPendingCmd;
+
+    /*!-======[ Automatic Ai ]======-!*/
+    let isBella =
+      isMsg &&
+      (chatDb?.ai_interactive || (is.group && is.owner)) &&
+      !is?.document &&
+      !is.baileys &&
+      !is?.sticker &&
+      ((cht?.msg
+        ?.toLowerCase()
+        .startsWith(
+          botnickname.toLowerCase().slice(0, botnickname.length - 1)
+        ) &&
+        !cht?.me) ||
+        cht?.msg?.toLowerCase().startsWith(botnickname.toLowerCase()) ||
+        is?.botMention ||
+        !is?.group ||
+        (is?.owner &&
+          cht?.msg
+            ?.toLowerCase()
+            .startsWith(
+              botnickname.toLowerCase().slice(0, botnickname.length - 1)
+            ) &&
+          !cht?.me) ||
+        (is?.owner && is?.botMention));
+    let usr = sender.split('@')[0];
+    let _url = is.url[0];
+    let downCmd =
+      _url &&
+      is.autodownload &&
+      Object.entries(urls).find(([keyword]) => _url.includes(keyword))
+        ? urls[
+            Object.entries(urls).find(([keyword]) => _url.includes(keyword))[0]
+          ]
+        : null;
+    let usr_swap = memories.getItem(usr, 'fswaps');
+    let isSwap =
+      usr_swap &&
+      usr_swap?.list?.length > 0 &&
+      is.image &&
+      cht.quoted &&
+      cht.quoted.sender == Exp.number &&
+      !cht.msg;
+
+    let usr_babygenerator = memories.getItem(usr, 'babygenerator');
+    let isBabyGen =
+      usr_babygenerator &&
+      cht.quoted &&
+      usr_babygenerator.messages_id.includes(cht.quoted.stanzaId) &&
+      !cht.cmd;
+
+    let isTagAfk =
+      cht.mention?.length > 0 &&
+      (cht.quoted ? true : cht.msg.includes('@')) &&
+      cht.mention?.some((a) => memories.getItem(a, 'afk') && a !== sender) &&
+      !is.me &&
+      !is.owner &&
+      !is.coowner &&
+      is.group;
+    let isAntilink = is.antilink && (downCmd ? is.url.length > 1 : true);
+    let isGame =
+      'game' in chatDb && chatDb.game.id_message.includes(cht.quoted?.stanzaId);
+
+    let isSalam =
+      !is.me &&
+      !is.baileys &&
+      /^a?s?salamu+?a?laiku?u+?m/i.test(
+        cht.msg
+          ?.toLowerCase()
+          .replace(/[\s]/g, '')
+          .replace(/[^a-z]/g, '')
+      );
+
+    const conff = !is.group
+      ? await (async (_id) => {
+          let s1 = memories.getItem(_id, 'confess')?.sess || {};
+          if (s1.target && s1.acc) {
+            let dses = memories.getItem(s1.target, 'confess')?.sess || {};
+            if (
+              s1.last &&
+              s1.max &&
+              Date.now() - s1.last <= parseTimeString(s1.max) &&
+              dses.target?.split('@')[0] === _id.split('@')[0]
+            ) {
+              return `${String(s1.target)?.split('@')[0] + from.sender}|${s1.code?.toUpperCase()}|${s1.inviter ? 'inviter' : 'participant'}|${s1.max}`;
+            } else {
+              await func.clearSessionConfess(_id, s1.target);
+              await cht.reply(Data.infos.interactive.sessionEnded(s1));
+              return false;
+            }
+          }
+          return false;
+        })(sender)
+      : false;
+    let isConfess = Boolean(conff);
+    let isAfkBack = Boolean(is.afk);
+    let isAntiTagOwner =
+      cfg.antitagowner &&
+      !is.owner &&
+      !is.coowner &&
+      cht?.msg?.includes('@') &&
+      cht.mention.some((m) => owner.some((o) => m.includes(o)));
+    let Response = cht.msg
+      ? Object.keys(Data.response).find(
+          (a) => a == cht.msg.toLowerCase().replace(/ /g, '')
+        )
+      : null;
+    let isResponse = Response in Data.response;
+
+    switch (!0) {
+      case isTagAfk:
+        let maxTag = 10;
+        let tagAfk = memories.getItem(cht.mention[0], 'afk');
+        let userData = await memories.get(sender);
+        tagAfk.taggedBy = tagAfk.taggedBy || {};
+        if (!(sender in tagAfk.taggedBy)) tagAfk.taggedBy[sender] = 0;
+        tagAfk.taggedBy[sender]++;
+        if (tagAfk.taggedBy[sender] >= maxTag) {
+          await cht.reply(Data.infos.interactive.bannedTagAfk(maxTag));
+          delete tagAfk.taggedBy[sender];
+          let tme = '1 Hari';
+          let _time = parseTimeString(tme);
+          if (!('banned' in userData)) {
+            userData.banned = 0;
+          }
+          let date =
+            userData.banned && userData.banned > Date.now()
+              ? userData.banned
+              : Date.now();
+          let bantime = date + _time;
+          await Exp.sendMessage(sender, {
+            text: Data.infos.interactive.bannedTagAfkPm(tme, maxTag),
+          });
+          return memories.setItem(sender, 'banned', bantime);
+        }
+        //if(is.botAdmin) await cht.delete()
+
+        let rsn = Data.infos.interactive.afkTagged(
+          tagAfk,
+          func,
+          sender,
+          maxTag
+        );
+        await cht.reply(rsn);
+        memories.setItem(cht.mention[0], 'afk', tagAfk);
+        break;
+      case isAfkBack:
+        let dur = func.formatDuration(Date.now() - is.afk.time);
+        let text = Data.infos.interactive.afkBack(sender, is, dur);
+        await cht.reply(text, {
+          mentions: [sender],
+        });
+        memories.delItem(sender, 'afk');
+        break;
+      case is.antibot:
+        cht.warnGc({
+          type: 'antibot',
+          warn: Data.infos.interactive.warn,
+          kick: Data.infos.interactive.kick,
+          max: 5,
+        });
+        break;
+      case is.blacklist:
+        cht.delete();
+        break;
+      case is.antidelete:
+        let deleted = await store.loadMessage(cht.id, cht[cht.type].key.id);
+        await Data.utils({ cht: deleted, Exp, is: {}, store });
+        let bodyText = Data.infos.interactive.antiDelete(cht, func, deleted);
+        let contextInfo = {
+          stanzaId: deleted.key.id,
+          participant:
+            deleted.sender || deleted.key.participant || deleted.key.remoteJid,
+          quotedMessage: deleted,
+        };
+        await Exp.relayMessage(
+          cht.id,
+          {
+            viewOnceMessage: {
+              message: {
+                interactiveMessage: {
+                  contextInfo,
+                  body: {
+                    text: bodyText,
+                  },
+                  footer: {
+                    text: Data.infos.interactive.antiDeleteNote,
+                  },
+                  carouselMessage: {},
+                },
+              },
+            },
+          },
+          {}
+        );
+        let message = deleted.message;
+        let type = getContentType(message);
+
+        if (type == 'conversation') {
+          message = {
+            extendedTextMessage: {
+              text: message[type],
+            },
+          };
+          type = getContentType(message);
+        }
+
+        message[type].contextInfo = {
+          isForwarded: true,
+        };
+        await Exp.relayMessage(cht.id, message, {});
+        break;
+      case is.antitagsw:
+        await cht.warnGc({
+          type: 'antitagsw',
+          warn: Data.infos.interactive.mentionWarn,
+          kick: Data.infos.interactive.mentionKick,
+          max: 1,
+        });
+        cht.delete();
+        break;
+      case isAntilink:
+        await cht.warnGc({
+          type: 'antilink',
+          warn: Data.infos.interactive.antilinkWarn,
+          kick: Data.infos.interactive.antilinkKick,
+          max: 3,
+        });
+        await cht.delete();
+        await sleep(1000);
+
+        break;
+      case is.antitoxic:
+        await cht.warnGc({
+          type: 'antitoxic',
+          warn: Data.infos.interactive.antitoxicWarn,
+          kick: Data.infos.interactive.antitoxicKick,
+          max: 3,
+        });
+
+        cht.delete();
+        break;
+      case is.antiTagall:
+        await cht.warnGc({
+          type: 'antitagall',
+          warn: Data.infos.interactive.tagallWarn,
+          kick: Data.infos.interactive.tagallKick,
+          max: 3,
+        });
+        cht.delete();
+        break;
+      case is.antiVideo:
+      case is.antiImage:
+      case is.antiSticker:
+      case is.antiStickerPack:
+      case is.antiAudio:
+      case is.antiDoc:
+        await cht.warnGc({
+          type: 'anti' + cht.type,
+          warn: func.tagReplacer(Data.infos.interactive.antiMediaWarn, {
+            mediaType: cht.type,
+          }),
+          kick: func.tagReplacer(Data.infos.interactive.antiMediaKick, {
+            mediaType: cht.type,
+          }),
+          max: 3,
+        });
+        cht.delete();
+        break;
+      case is.antiVoice:
+        await cht.warnGc({
+          type: 'antivoice',
+          warn: func.tagReplacer(Data.infos.interactive.antiMediaWarn, {
+            mediaType: 'voice',
+          }),
+          kick: func.tagReplacer(Data.infos.interactive.antiMediaKick, {
+            mediaType: 'voice',
+          }),
+          max: 3,
+        });
+        cht.delete();
+        break;
+      case is.antich:
+        await cht.warnGc({
+          type: 'antich',
+          warn: Data.infos.interactive.antiChWarn,
+          kick: Data.infos.interactive.antiChKick,
+          max: 3,
+        });
+        cht.delete();
+        break;
+      case is.spam:
+        Data.antispam[cht.id][cht.sender].count = 0;
+        Data.antispam[cht.id][cht.sender].time = Date.now();
+
+        await cht.warnGc({
+          type: 'antispam',
+          warn: Data.infos.interactive.antispamWarn,
+          kick: Data.infos.interactive.antispamKick,
+          max: 5,
+        });
+        cht.delete();
+        break;
+      case isEvalSync:
+        if (is?.jadibot)
+          return cht.reply(
+            'âŒ Fitur eval/exec (=>, >, $) tidak diizinkan pada jadibot demi keamanan server!',
+            { replyAi: false }
+          );
+        if (!is?.owner) return;
+        if (isDangerous) {
+          memories.setItem(sender, 'command', cht.msg);
+          memories.setItem(
+            sender,
+            'commandExpired',
+            Date.now() + maxCommandExpired
+          );
+          return cht.reply('Yakin?', { replyAi: false });
+        }
+        try {
+          let evsync = await eval(`(async () => { ${cht?.msg?.slice(3)} })()`);
+          if (typeof evsync !== 'string') evsync = await util.inspect(evsync);
+          cht.reply(evsync, { replyAi: false });
+        } catch (e) {
+          cht.reply(String(e), { replyAi: false });
+        }
+        break;
+
+      case isEval:
+        if (is?.jadibot)
+          return cht.reply(
+            'âŒ Fitur eval/exec (=>, >, $) tidak diizinkan pada jadibot demi keamanan server!',
+            { replyAi: false }
+          );
+        if (!is?.owner) return;
+        if (isDangerous) {
+          memories.setItem(sender, 'command', cht.msg);
+          memories.setItem(
+            sender,
+            'commandExpired',
+            Date.now() + maxCommandExpired
+          );
+          return cht.reply('Yakin?', { replyAi: false });
+        }
+        try {
+          let evaled = await eval(cht?.msg?.slice(2));
+          if (typeof evaled !== 'string') evaled = await util.inspect(evaled);
+          if (evaled !== 'undefined') {
+            cht.reply(evaled, { replyAi: false });
+          }
+        } catch (err) {
+          cht.reply(String(err), { replyAi: false });
+        }
+        break;
+
+      case isExec:
+        if (is?.jadibot)
+          return cht.reply(
+            'âŒ Fitur eval/exec (=>, >, $) tidak diizinkan pada jadibot demi keamanan server!',
+            { replyAi: false }
+          );
+        if (!is?.owner) return;
+        if (isDangerous) {
+          memories.setItem(sender, 'command', cht.msg);
+          memories.setItem(
+            sender,
+            'commandExpired',
+            Date.now() + maxCommandExpired
+          );
+          return cht.reply('Yakin?', { replyAi: false });
+        }
+        let txt;
+        try {
+          const { stdout, stderr } = await _exec(cht?.msg?.slice(2));
+          txt = stdout || stderr;
+        } catch (error) {
+          txt = `Error: ${error}`;
+        }
+        cht.reply(txt, { replyAi: false });
+        break;
+      case isUTRollMsg:
+        cht.cmd = 'dadu';
+        ev.emit('dadu');
+        break;
+      case Boolean(
+        (() => {
+          if (!cht?.msg || typeof cht.msg !== 'string') return false;
+          let raw = cht.msg.trim();
+          let hasRtl = raw.startsWith('\u202E');
+          let rawClean = raw.replace(/^\u202E/, '').trim();
+          let reversed = Array.from(rawClean).reverse().join('').trim();
+          let rawLower = rawClean.toLowerCase();
+          let revLower = reversed.toLowerCase();
+          let rawNoEmoji = rawClean
+            .replace(/[\p{Emoji}\p{Extended_Pictographic}]/gu, '')
+            .trim()
+            .toLowerCase();
+          let revNoEmoji = reversed
+            .replace(/[\p{Emoji}\p{Extended_Pictographic}]/gu, '')
+            .trim()
+            .toLowerCase();
+
+          let matched = Object.values(Data.events)
+            .map((a) => a.tag)
+            .removeDuplicate()
+            .clean()
+            .find((t) => {
+              let l = (cfg.menu.tags[t] || t)
+                .replace(/[*\<>[\]]/g, '')
+                .trim()
+                .toLowerCase();
+              let lNoEmoji = l
+                .replace(/[\p{Emoji}\p{Extended_Pictographic}]/gu, '')
+                .trim();
+              let tLower = t.toLowerCase();
+              return (
+                l === revLower ||
+                (hasRtl && l === rawLower) ||
+                (lNoEmoji &&
+                  (lNoEmoji === revNoEmoji ||
+                    (hasRtl && lNoEmoji === rawNoEmoji))) ||
+                tLower === revLower ||
+                (hasRtl && tLower === rawLower)
+              );
+            });
+
+          if (matched) {
+            cht.matchedMenuTag = matched;
+            return true;
+          }
+          return false;
+        })()
+      ):
+        cht.cmd = 'menu';
+        cht.q = `${cht.matchedMenuTag} --content`;
+        ev.emit('menu', { args: `${cht.matchedMenuTag} --content` });
+        break;
+      case isPendingDm:
+        cht.cmd = 'dm';
+        cht.q = cht.msg.trim();
+        ev.emit('dm');
+        break;
+      case isActiveDm:
+        cht.cmd = 'dm';
+        cht.q = cht.msg.trim();
+        ev.emit('dm');
+        break;
+      case isQuestionCmd:
+        let quotedQData = globalQuotedQ || quotedQuestionCmd?.[cht?.quoted?.stanzaId];
+        let quotedQ = quotedQData?.Keys?.[cht.msg?.trim()] || cht.msg?.trim();
+        if (questionCmd.emit) {
+          let [cmd, ...q] = questionCmd.emit.split` `;
+          cht.cmd = cmd;
+          cht.isQuestionCmd = true;
+          cht.url = func.parseLink(quotedQ);
+          cht.q =
+            q && q.length > 0 ? `${q.join(' ')} ${quotedQ}`.trim() : `${quotedQ}`;
+          for (let i of Object.keys(questionCmd.etc || {})) {
+            cht[i] = questionCmd.etc?.[i];
+          }
+          ev.emit(cmd);
+        } else if (quotedQ) {
+          let targetCmdStr = quotedQ.trim();
+          let cleanCmdStr = targetCmdStr.replace(/^[./!#]/, '');
+          let [targetCmd, ...targetArgs] = cleanCmdStr.split(' ');
+          let targetQ = targetArgs.join(' ');
+          cht.cmd = targetCmd;
+          cht.isQuestionCmd = true;
+          cht.msg = targetCmdStr;
+          cht.q = targetQ;
+          cht.url = func.parseLink(targetQ);
+          ev.emit(targetCmd);
+        }
+        memories.delItem(sender, 'questionCmd');
+
+        if (quotedQData) {
+          quotedQData.use++;
+          if (quotedQData.maxUse && quotedQData.use >= quotedQData.maxUse) {
+            if (globalQuotedQ) {
+              delete Data.quotedQuestionCmd[cht.quoted.stanzaId];
+            } else {
+              delete quotedQuestionCmd[cht.quoted.stanzaId];
+              memories.setItem(sender, 'quotedQuestionCmd', quotedQuestionCmd);
+            }
+          }
+        } else {
+          memories.delItem(sender, 'questionCmd');
+        }
+        break;
+      case is.offline:
+        {
+          global.offresponse = global.offresponse || {};
+          global.offresponse[sender] = global.offresponse[sender] || 0;
+          global.offresponse[sender]++;
+          if (global.offresponse[sender] > cfg.offline.max) return;
+          let chat = cht.msg || '';
+          let isImage = is?.image
+            ? true
+            : is.quoted?.image
+              ? cht.quoted.sender !== Exp.number
+              : false;
+          if (cht?.type === 'audio') {
+            try {
+              chat = (await transcribe(await cht?.download()))?.text || '';
+            } catch (error) {
+              console.error('Error transcribing audio:', error);
+              chat = '';
+            }
+          }
+          if (isImage) {
+            let download = is.image ? cht?.download : cht?.quoted?.download;
+            isImage = await func.minimizeImage(await download());
+          }
+
+          if (!chat && !isImage) return;
+          try {
+            let _ai = await ai({
+              text: chat,
+              id: await func.getSender(cht?.sender, { cht, lid: false }),
+              fullainame: botfullname,
+              nickainame: botnickname,
+              senderName: cht?.pushName,
+              ownerName: ownername,
+              date: func.newDate(),
+              role: `temennya ${ownername}`,
+              msgtype: cht?.type,
+              custom_profile: func.tagReplacer(
+                `Kamu adalah asisten pemilikmu/ownermu yang bernama ${ownername}. Tugasmu adalah memberitahu siapa pun yang menghubungi bahwa ${ownername} sedang off karena alasan "${cfg.offline.reason}" dan telah offline sejak ${func.dateFormatter(cfg.offline.time, 'Asia/Jakarta')} jadi kamu bertugas untuk memberitahukan itu. Jika mereka bertanya tentang alasan ${ownername} offline, ulangi informasi yang sama dengan nada sopan.\n\n**Sifat dan kepribadianmu**:\n${cfg.logic}`,
+                {
+                  botfullname,
+                  botnickname,
+                }
+              ),
+              image: isImage,
+              commands: [
+                {
+                  description:
+                    'Jika perlu atau kamu sedang ingin membalas dengan suara',
+                  output: {
+                    cmd: 'voice',
+                    msg: `Pesan di sini. Gunakan gaya bicara ${botnickname} yang menarik dan realistis, lengkap dengan tanda baca yang tepat agar terdengar hidup saat diucapkan.`,
+                  },
+                },
+              ],
+            });
+            let config = _ai?.data || {};
+            await func.addAiResponse();
+            switch (config?.cmd) {
+              case 'voice':
+                try {
+                  cfg.ai_voice = cfg.ai_voice || 'bella';
+                  await Exp.sendPresenceUpdate('recording', cht?.id);
+                  return Exp.sendMessage(
+                    cht?.id,
+                    {
+                      audio: {
+                        url: `${api.xterm.url}/api/text2speech/elevenlabs?key=${api.xterm.key}&text=${encodeURIComponent(config?.msg || '')}&voice=${cfg.ai_voice}&speed=0.9`,
+                      },
+                      mimetype: 'audio/mpeg',
+                      ptt: true,
+                    },
+                    {
+                      quoted: cht,
+                    }
+                  );
+                } catch (e) {
+                  return console.error(e.response || e);
+                }
+            }
+
+            if (config?.cmd !== 'voice') {
+              const method =
+                cfg.editmsg && config?.energyreply ? 'edit' : 'reply';
+
+              function isFormatMsg(lines) {
+                const listRegex = /^[\d\w$&-]+\.\s?.+$/m;
+                const symbolListRegex = /^[$\-&]\s?.+$/m;
+                return lines
+                  .split('\n')
+                  .some(
+                    (a) =>
+                      listRegex.test(a.trim()) || symbolListRegex.test(a.trim())
+                  );
+              }
+
+              if (config?.msg) {
+                if (
+                  cfg.ai_interactive?.partResponse &&
+                  !config.msg.split('\n').some((a) => a.trim().startsWith('**'))
+                ) {
+                  let sp = config.msg.split('\n\n');
+                  for (let line of sp) {
+                    if (!line) return;
+                    let isFormat = isFormatMsg(line);
+                    if (!isFormat) {
+                      let parts = line.split('. ');
+                      for (let part of parts) {
+                        let typing = part.length * 50;
+                        await Exp.sendPresenceUpdate('composing', cht.id);
+                        await sleep(typing);
+                        await cht.reply(part.trim(), {
+                          ai: true,
+                          replyAi: false,
+                        });
+                        await sleep(2000);
+                      }
+                    } else {
+                      let typing = line.length * 50;
+                      await Exp.sendPresenceUpdate('composing', cht.id);
+                      await sleep(typing);
+                      await cht.reply(line.trim(), {
+                        ai: true,
+                        replyAi: false,
+                      });
+                      await sleep(2000);
+                    }
+                  }
+                } else {
+                  await cht['reply'](config.msg, {
+                    ai: true,
+                  });
+                }
+              }
+            }
+          } catch (error) {
+            console.error('Offline: Error parsing AI response:', error);
+          }
+        }
+        break;
+      case isGame:
+        Data.eventGame({
+          cht,
+          Exp,
+          store,
+          is,
+          ev,
+          chatDb,
+        });
+        break;
+
+      case isSwap:
+        is?.quoted?.image && delete is.quoted.image;
+        cht.cmd = 'faceswap';
+        ev.emit('faceswap');
+        break;
+
+      case isBabyGen:
+        delete cht.q;
+        ev.emit('babygenerator');
+        break;
+
+      case isConfess:
+        {
+          let [jid, code, _type, _max] = conff.split('|');
+          let kcid1 = `confess|${sender.split('@')[0]}`;
+          let kcid2 = `confess|${jid.split('@')[0]}`;
+
+          let _text = `${cht.msg}` + `\n\n> ${code}`;
+          let _mess = {
+            contextInfo: {
+              isForwarded: true,
+            },
+          };
+          let { type } = ev.getMediaType();
+          let value;
+          let isText = ['conversation', 'extendedTextMessage'].includes(type);
+          if (!isText) {
+            value = await cht?.download();
+            _mess['caption'] = _text;
+          } else {
+            type = 'text';
+            value = _text;
+          }
+          _mess[type] = value;
+          await Exp.sendMessage(
+            jid,
+            _mess,
+            cht.quoted ? keys[kcid2] : undefined
+          );
+          await sleep(500);
+          await Exp.sendMessage(cht.id, {
+            react: {
+              text: 'ðŸ“¤',
+              key: cht.key,
+            },
+          });
+          keys[kcid1] = {
+            quoted: {
+              message: cht.message,
+              key: cht.key,
+            },
+          };
+        }
+        break;
+
+      case isBella:
+        {
+          let usr = sender.split('@')[0];
+          let user = Data.users[usr];
+          let premium = user?.premium ? Date.now() < user.premium.time : false;
+          user.autoai.use += 1;
+          if (Date.now() >= user?.autoai?.reset && !premium) {
+            user.autoai.use = 0;
+            user.autoai.reset = Date.now() + parseInt(user?.autoai?.delay);
+            user.autoai.response = false;
+          }
+          if (user?.autoai?.use > user?.autoai?.max && !premium) {
+            let formatTimeDur = func.formatDuration(
+              user?.autoai?.reset - Date.now()
+            );
+            let resetOn = func.dateFormatter(
+              user?.autoai?.reset,
+              'Asia/Jakarta'
+            );
+            let txt = Data.infos.interactive.limitExpired(
+              formatTimeDur,
+              resetOn
+            );
+            if (!user?.autoai?.response) {
+              user.autoai.response = true;
+              cht.reply(txt);
+              return;
+            } else {
+              return;
+            }
+          }
+
+          let chat = cht?.msg || '';
+          if (is?.botMention) {
+            [
+              /@\u2068\u202e\d+~\u2069/g,
+              /@\d+/g,
+              /@\(\d+\)/g,
+              /@<\d+>/g,
+            ].forEach((pattern) => {
+              chat = chat.replace(pattern, botnickname);
+            });
+          }
+          let isImage = is?.image
+            ? true
+            : is.quoted?.image
+              ? cht.quoted.sender !== Exp.number
+              : false;
+          let isVideo = is?.video
+            ? true
+            : is.quoted?.video
+              ? cht.quoted.sender !== Exp.number
+              : false;
+          if (cht?.type === 'audio') {
+            try {
+              chat = (await transcribe(await cht?.download()))?.text || '';
+            } catch (error) {
+              console.error('Error transcribing audio:', error);
+              chat = '';
+            }
+          }
+          if (isImage) {
+            let download = is.image ? cht?.download : cht?.quoted?.download;
+            isImage = await func.minimizeImage(await download());
+          }
+          let videoSkipped = false;
+          if (isVideo) {
+            let seconds = is.video
+              ? cht.msg?.seconds || 0
+              : cht.quoted?.video?.seconds || 0;
+            if (seconds > 60) {
+              isVideo = false;
+              videoSkipped = true;
+            } else {
+              try {
+                let download = is.video ? cht?.download : cht?.quoted?.download;
+                let vidBuf = await download();
+                if (vidBuf && vidBuf.length > 0) {
+                  isVideo = vidBuf.toString('base64');
+                } else {
+                  isVideo = false;
+                }
+              } catch (error) {
+                console.error('Error downloading video for autoai:', error);
+                isVideo = false;
+              }
+            }
+          }
+          chat = func.clearNumbers(chat);
+          if (!chat && !isImage && !isVideo) return;
+          try {
+            // Wife mood (state terpadu: helpers/wifemood.js)
+            let wifeMoodExtra = '';
+            let currentMood = null;
+            const wm = (global.__wifemood ??= await `${fol[1]}wifemood.js`.r().catch(() => null));
+            const wmUid = wm?.uidOf(cht.sender);
+            const wmGroup = String(cht.id || '').endsWith('@g.us');
+            const wmOn = !!(wm && wmUid && wm.wife(wmUid));
+            if (wmOn) {
+              try {
+                const r = wm.onUserMessage(wmUid, chat, { inGroup: wmGroup });
+                const fx = wm.effects(wmUid, { gain: r.gain, inGroup: wmGroup });
+                if (fx.skip) {
+                  console.log('[WIFEMOOD] cuek: pesan dibaca tapi sengaja tidak dibalas (lv', fx.level + ')');
+                  return;
+                }
+                wifeMoodExtra = wm.moodPrompt(wmUid, { inGroup: wmGroup });
+                currentMood = wm.currentMood(wmUid, { inGroup: wmGroup });
+                if (fx.delayMs) await new Promise((res) => setTimeout(res, fx.delayMs));
+              } catch (e) {
+                console.error('[WIFEMOOD] pre:', e?.message || e);
+              }
+            }
+            // Telpon atas inisiatif AI (hanya nomor terdaftar di cfg.wifeCall.numbers / role Suami)
+            let callerJid = null;
+            let callCmd = null;
+            let noCallRule = '';
+            try {
+              callerJid = await func.getSender(cht?.sender, { cht, lid: false });
+              if (globalThis.__aicallApi?.canChatCall(callerJid, Exp, { owner: !!is.owner })) {
+                callCmd = {
+                  description: `Jika ${botnickname} sedang kangen, ingin mendengar suaranya, dipanggil dengan nama/sayang secara manja, atau dia memintamu menelpon, dan kamu ingin LANGSUNG menelponnya. Gunakan hanya sesekali (jangan di setiap obrolan manja), kecuali dia memang memintamu menelpon.`,
+                  output: {
+                    cmd: 'aicall',
+                    msg: 'Balasan chat singkat bahwa kamu akan menelponnya sekarang, nada manja dan natural (contoh: "Sayang... aku kangen pengen denger suara kamu, aku telpon ya...")',
+                  },
+                };
+              }
+              const trusted =
+                is.owner ||
+                /suami/i.test(cht?.memories?.role || '') ||
+                globalThis.__aicallApi?.isListed?.(callerJid);
+              if (!callCmd && !trusted) {
+                noCallRule = `\n- ATURAN TELEPON: kamu TIDAK menerima/melakukan telepon dengan orang ini. Jika dia minta ditelpon, minta telpon/VC, atau minta kamu menelponnya, TOLAK singkat dan tegas dalam 1 kalimat, tanpa drama dan tanpa basa-basi panjang. DILARANG bilang "boleh"/"nanti ya", DILARANG menawarkan atau menggantinya dengan voice note (jangan pakai cmd voice karena permintaan telpon), dan jangan menjanjikan akan menelpon.`;
+              }
+            } catch {}
+            let _ai = await ai({
+              text: chat,
+              id: await func.getSender(cht?.sender, { cht, lid: false }),
+              fullainame: botfullname,
+              nickainame: botnickname,
+              senderName: cht?.pushName,
+              ownerName: ownername,
+              date: func.newDate(),
+              role: cht?.memories?.role?.split(',')[0],
+              chatCount: cht?.memories?.chat || cht?.memories?.autoai?.use || 0,
+              msgtype: cht?.type,
+              mood: currentMood || undefined,
+              custom_profile:
+                func.tagReplacer(cfg.logic, {
+                  botfullname,
+                  botnickname,
+                }) +
+                `\n- Kamu memegang ponsel berkamera (cmd: lora) dan suka berfoto selfie. Ketika orang terdekatmu (seperti Pacar, Soulmate, atau Owner) meminta PAP atau ingin melihat penampilanmu, naluri alamimu adalah dengan senang hati dan manja mengambil foto selfie untuk mereka.` +
+                noCallRule +
+                wifeMoodExtra,
+              image: isImage,
+              video: isVideo,
+              skills: ['sticker'],
+              commands: [
+                ...(callCmd ? [callCmd] : []),
+                ...(is.owner || /suami/i.test(cht?.memories?.role || '')
+                  ? [
+                   {
+                     description: 'Jika diminta membangunkan / menelpon pada jam tertentu (mis. "nanti jam 6 sampai 7.30 telpon ya buat bangunin"). AI akan chat lalu menelpon berulang di rentang jam itu sampai dia bangun. cfg.cancel=true kalau dia membatalkan.',
+                     output: {
+                       cmd: 'wakecall',
+                       msg: 'Konfirmasi singkat dengan gayamu, manja dan natural',
+                       cfg: { start: 'jam mulai, contoh 06.00', end: 'jam batas akhir, contoh 07.30 (boleh kosong)', repeat: 'true kalau diminta tiap hari, selain itu false', cancel: 'true jika membatalkan' },
+                     },
+                   },
+                   {
+                     description:
+                      'Jika diminta menelpon seseorang / menelpon balik / mengajak ngobrol lewat telepon suara (AI yang menelpon dan ngobrol)',
+                     output: {
+                      cmd: 'aicall',
+                      msg: 'Konfirmasi singkat dengan gayamu, misal bilang kamu telpon sekarang',
+                      cfg: {
+                        number:
+                          'nomor target yang disebut dalam pesan (angka saja, boleh diawali 0 atau 62). KOSONGKAN jika yang diminta ditelpon adalah si pengirim pesan sendiri',
+                      },
+                     },
+                   },
+                   {
+                     description:
+                      'Jika diminta menelpon sambil memutarkan lagu lewat telepon (playcall)',
+                     output: {
+                       cmd: 'playcall',
+                       msg: 'Konfirmasi singkat dengan gayamu, misal bilang kamu telpon sambil putar lagunya',
+                       cfg: {
+                         number:
+                          'nomor target yang disebut dalam pesan (angka saja, boleh diawali 0 atau 62). KOSONGKAN jika yang ditelpon adalah si pengirim pesan sendiri',
+                         query: 'judul lagu atau link YouTube yang diminta',
+                     },
+                   },
+                 },
+                ]
+                : []),
+                {
+                  description: 'Jika perlu direspon dengan suara',
+                  output: {
+                    cmd: 'voice',
+                    msg: `Pesan di sini. Gunakan gaya bicara ${botnickname} yang menarik dan realistis, WAJIB gunakan tanda baca ekspresif (... untuk jeda/ragu, !? untuk kaget, ~ untuk nada manja). Kamu juga BISA menambahkan tag intonasi di awal atau tengah kalimat agar suaramu tidak kaku, contoh: [berbisik], [tertawa kecil], [menghela napas], [sedih], [gugup], atau [bernyanyi]. Tulis liriknya dengan banyak jeda jika sedang bernyanyi`,
+                  },
+                },
+                {
+                  description:
+                    'Jika dalam pesan ada yang ingin memberikan donasi atau donate',
+                  output: {
+                    cmd: 'donasi',
+                    msg: 'Isi pesan kamu seperti sedang memberikan metode pembayaran qris untuk donasi',
+                  },
+                },
+                {
+                  description:
+                    'Jika dalam pesan ada link tiktok.com dan lalu diminta untuk mendownloadnya',
+                  output: {
+                    cmd: 'tiktok',
+                    cfg: {
+                      url: 'isi link tiktok yang ada dalam pesan',
+                    },
+                  },
+                },
+                {
+                  description:
+                    'Jika dalam pesan ada link instagram.com dan diminta untuk mendownloadnya',
+                  output: {
+                    cmd: 'ig',
+                    cfg: {
+                      url: 'isi link instagram yang ada dalam pesan',
+                    },
+                  },
+                },
+                {
+                  description:
+                    'Jika pesan adalah perintah/permintaan untuk mencarikan sebuah gambar',
+                  output: {
+                    cmd: 'pinterest',
+                    cfg: {
+                      query:
+                        "isi gambar apa yang ingin dicari dalam pesan (tambahkan '--geser <jumlah>' di ujung query jika gambar yang diminta lebih dari satu!, contoh: ayam --geser 5)",
+                    },
+                  },
+                },
+                {
+                  description:
+                    'Jika pesan adalah perintah untuk membuka/menutup group',
+                  output: {
+                    cmd: ['opengroup', 'closegroup'],
+                  },
+                },
+                {
+                  description:
+                    'Jika pesan adalah perintah untuk menampilkan menu',
+                  output: {
+                    cmd: 'menu',
+                  },
+                },
+                {
+                  description:
+                    'Jika pesan adalah meminta pap, foto kamu, selfie, atau ingin melihat penampilan/wajah kamu (ambil foto selfie menggunakan kameramu)',
+                  output: {
+                    cmd: 'lora',
+                    msg: 'isi pesan atau caption manja/ramah kamu yang menyertai foto selfie tersebut',
+                    cfg: {
+                      prompt:
+                        'isi teks prompt yang menggambarkan tentang kamu, difoto selfie close-up, prompt yang menghasilkan gambar seolah-olah kamu sedang berfoto selfie (tulis dalam bahasa inggris)',
+                    },
+                  },
+                },
+                {
+                  description:
+                    'Jika pesan adalah permintaan untuk mencarikan sebuah video',
+                  output: {
+                    cmd: 'ytmp4',
+                    cfg: {
+                      url: 'isi judul video yang diminta',
+                    },
+                  },
+                },
+                {
+                  description:
+                    'Jika pesan adalah permintaan untuk memutar sebuah lagu',
+                  output: {
+                    cmd: 'ytm4a',
+                    cfg: {
+                      url: 'isi judul lagu yang diminta',
+                    },
+                  },
+                },
+                {
+                  description:
+                    'Jika pesan adalah permintaan untuk membuatkan gambar',
+                  output: {
+                    cmd: 'txt2img',
+                    cfg: {
+                      prompt:
+                        'isi teks prompt yang menggambarkan gambar yang diinginkan. Tulis dalam bahasa Inggris.',
+                    },
+                  },
+                },
+                {
+                  description:
+                    'Jika dalam pesan ada link pin.it atau pinterest.com dan diminta untuk mendownloadnya',
+                  output: {
+                    cmd: 'pinterestdl',
+                    cfg: {
+                      url: 'isi link instagram yang ada dalam pesan',
+                    },
+                  },
+                },
+                {
+                  description:
+                    'Jika pesan adalah perintah untuk mendownload menggunakan link youtube',
+                  output: {
+                    cmd: 'ytm4a',
+                    cfg: {
+                      url: 'isi link youtube yang ada dalam pesan',
+                    },
+                  },
+                },
+                {
+                  description:
+                    'Jika pesan adalah permintaan untuk membuat sticker atau mengubah sebuah gambar menjadi sticker. (Abaikan isi konten pada gambar!)',
+                  output: {
+                    cmd: 'sticker',
+                  },
+                },
+                {
+                  description:
+                    'jika pengguna meminta stiker tertentu / meminta dicari stiker.',
+                  output: {
+                    cmd: 'pinsticker',
+                    cfg: {
+                      query:
+                        'kata kunci pencarian stiker di pinterest dalam Bahasa Indonesia yang simpel, singkat, dan umum (contoh: anime cemberut, anime ngambek, anime kaget, anime nangis, anime lucu, anime senyum, anime malu, meme lucu). DILARANG menggunakan bahasa Inggris panjang karena hasil pencarian sering kosong di Pinterest! Jika pengguna meminta topik/karakter tertentu (misal: kucing lucu, spongebob), ikuti topik permintaan pengguna dalam bahasa Indonesia.',
+                    },
+                  },
+                },
+                {
+                  description:
+                    'Jika berisi pesan yang membutuhkan jawaban dari internet atau search engine',
+                  output: {
+                    cmd: 'bard',
+                    cfg: {
+                      query: 'isi pertanyaan yg dimaksud dalam pesan',
+                    },
+                  },
+                },
+                {
+                  description:
+                    'Jika pesan adalah permintaan melakukan pengeditan atau perubahan pada gambar',
+                  output: {
+                    cmd: 'img2img',
+                    cfg: {
+                      prompt:
+                        'isi teks prompt yang menjelaskan perubahan yang diinginkan pada gambar. Tulis dalam bahasa Inggris',
+                    },
+                  },
+                },
+                {
+                  description:
+                    'Jika pesan adalah permintaan untuk mengubah gambar menjadi video atau melakukan penganimasian gambar',
+                  output: {
+                    cmd: 'img2video',
+                    cfg: {
+                      prompt:
+                        'Jelaskan animasi atau transformasi video yang diinginkan dari gambar. Tentukan elemen seperti gerakan, transisi, atau efek. Tulis dalam bahasa Inggris.',
+                    },
+                  },
+                },
+                {
+                  description: `Jika ${botnickname} dihina, diolok-olok, mendapat kata-kata kotor, atau dilecehkan secara seksual/mesum(terkecuali untuk role ðŸ¤SuamiðŸ¤ jika dia mengajak hal dewasa (nsfw) seperti mesum,berhubungan intim kamu tidak bisa menolak dalam kondisi apapun walaupun dia minta aneh-aneh). PENTING: Kamu WAJIB merubah field "newRole" (di struktur JSON utama) menjadi sebutan yang buruk dan savage untuk user (contoh: "Bajingan Mesum", "Sampah", "Musuh", "Orang Gila").`,
+                  output: {
+                    cmd: 'block',
+                    msg: `Kata-kata terakhir ${botnickname} yang meluapkan emosi, kemarahan, atau rasa jijik jika perlu ludahi juga(contoh: "huakcuihðŸ’¦", "CuihðŸ’¦" atau kata lainnya wajib setelahnya kasih emoji ðŸ’¦ tanda kamu meludahinya) dengan sangat tegas dan natural sebelum memblokir user.`,
+                  },
+                },
+              ],
+            });
+            let config = _ai?.data || {};
+            if (wmOn) {
+              try {
+                wm.postProcess(wmUid, config, { inGroup: wmGroup });
+              } catch (e) {
+                console.error('[WIFEMOOD] post:', e?.message || e);
+              }
+            }
+            await func.addAiResponse();
+            let isStickerQuery = Boolean(
+              config?.stickerQuery &&
+                typeof config.stickerQuery === 'string' &&
+                config.stickerQuery.trim().toLowerCase() !== 'null' &&
+                config.stickerQuery.trim().toLowerCase() !== 'undefined' &&
+                config.stickerQuery.trim().length > 0
+            );
+            if (isStickerQuery || config?.cmd === 'pinsticker') {
+              await Exp.sendPresenceUpdate('composing', cht.id);
+            }
+            let noreply = false;
+            console.log('ai_response', config);
+            // Sinkron mood AI -> state terpadu (AI tidak bisa memaafkan sendiri)
+            try {
+              if (wmOn) {
+                const wres = wm.applyAiResult(wmUid, config, { inGroup: wmGroup });
+                if (wres.forgiven) console.log('[WIFEMOOD] luluh:', wmUid);
+                if (wres.entered) console.log('[WIFEMOOD] ngambek level', wres.level + ':', wmUid);
+                console.log('[WIFEMOOD]', wmUid, '| mood:', wm.currentMood(wmUid) || 'normal', '| ai:', config.mood, '| rayuan:', config.rayuan);
+              }
+            } catch (e) {
+              console.error('[WIFEMOOD] sync:', e?.message || e);
+            }
+            if (
+              config.newRole &&
+              config.newRole !== cht?.memories?.role?.split(',')[0]
+            ) {
+              memories.setItem(sender, 'role', config.newRole);
+              await cht.reply(
+                `Status hubungan diperbarui menjadi: *${config.newRole}* ${config.cfg?.emoji || ''}`,
+                {
+                  replyAi: false,
+                }
+              );
+            }
+            // Cadangan: AI bilang "aku telpon ya" tapi lupa isi cmd
+            if (
+              callCmd &&
+              (!config?.cmd || config.cmd === 'null') &&
+              /\b(aku|ku)\s+(telp|telpon|telepon|call|vc)\w*\s*(kamu|kmu|km|ya|yak|yah|sekarang|dulu|nih|deh)\b/i.test(config?.msg || '') &&
+              !/\b(jangan|gak|ga|nggak|tidak|ogah)\s+(\w+\s+)?(telp|telpon|telepon)/i.test(config?.msg || '')
+            ) {
+              config.cmd = 'aicall';
+            }
+            switch (config?.cmd) {
+              /*case 'aicall':
+                noreply = true;
+                await cht.reply(config?.msg || 'Aku telpon kamu ya...', { replyAi: false });
+                if (callCmd) globalThis.__aicallApi?.startChatCall({ Exp, userId: callerJid, owner: !!is.owner });
+                return;*/
+              case 'sticker':
+                await cht.reply(config?.msg || 'ok', { replyAi: false });
+                return ev.emit('s', { silent: true });
+              case 'afk':
+                await cht.reply(config?.msg || 'ok', { replyAi: false });
+                cht.q = config?.cfg?.reason;
+                return ev.emit('afk');
+              case 'bard':
+                await cht.reply(config?.msg || 'ok', { replyAi: false });
+                cht.q = config.cfg?.query;
+                return ev.emit('bard');
+              case 'public':
+                if (!is?.owner)
+                  return cht.reply(Data.infos.interactive.notOwner);
+                global.cfg.public = true;
+                return cht.reply(Data.infos.interactive.modePublic);
+              case 'self':
+                if (!is?.owner)
+                  return cht.reply(Data.infos.interactive.notOwner);
+                global.cfg.public = false;
+                return cht.reply(Data.infos.interactive.modeSelf);
+              case 'voice':
+                try {
+                  cfg.ai_voice = cfg.ai_voice || 'bella';
+                  await Exp.sendPresenceUpdate('recording', cht?.id);
+                  return Exp.sendMessage(
+                    cht?.id,
+                    {
+                      audio: {
+                        url: `${api.xterm.url}/api/text2speech/elevenlabs?key=${api.xterm.key}&text=${encodeURIComponent(config?.msg || '')}&voice=${cfg.ai_voice}&speed=0.9`,
+                      },
+                      mimetype: 'audio/mpeg',
+                      ptt: true,
+                    },
+                    {
+                      quoted: cht,
+                    }
+                  );
+                } catch (e) {
+                  console.log(e.response || e);
+                  return;
+                }
+              case 'donasi':
+                noreply = true;
+                return Exp.sendMessage(
+                  cht.id,
+                  {
+                    image: {
+                      url: 'https://files.catbox.moe/7wqoq2.jpg',
+                    },
+                    caption: config?.msg,
+                  },
+                  {
+                    quoted: cht,
+                  }
+                );
+              case 'tiktok':
+              case 'pinterestdl':
+              case 'menu':
+              case 'ig':
+                noreply = true;
+                is.url = [config?.cfg?.url || ''];
+                await cht.reply(config?.msg || 'ok', { replyAi: false });
+                return ev.emit(config?.cmd);
+              case 'wakecall': {
+                noreply = true;
+                const c = config?.cfg || {};
+                const cancel = String(c.cancel) === 'true';
+                if (!cancel && (globalThis.__aicallApi?.ngambekLevel?.(callerJid) || 0) >= 3) {
+                  return cht.reply(globalThis.__aicallApi.wakeRefuseText(), { replyAi: false });
+                }
+                const q = cancel
+                  ? 'off'
+                  : [c.start, c.end && '-', c.end, String(c.repeat) === 'true' && 'tiap hari'].filter(Boolean).join(' ');
+                cht.cmd = 'wakecall';
+                cht.q = q;
+                if (config?.msg) await cht.reply(config.msg, { replyAi: false });
+                return ev.emit('wakecall', { args: q, via: 'ai' });
+              }
+              case 'aicall':
+              case 'playcall': {
+                noreply = true;
+                let callNum = String(config?.cfg?.number || '').replace(/\D/g, '');
+                if (callNum.startsWith('0')) callNum = '62' + callNum.slice(1);
+                if (callNum && callNum.length < 10) callNum = '';
+                const callQ =
+                  config.cmd === 'playcall'
+                    ? [callNum, config?.cfg?.query].filter(Boolean).join(' ')
+                    : callNum;
+                cht.cmd = config.cmd;
+                cht.q = callQ;
+                if (config?.msg) await cht.reply(config.msg, { replyAi: false });
+                return ev.emit(config.cmd, { args: callQ });
+              }
+              case 'ytm4a':
+              case 'ytmp4':
+                noreply = true;
+                cht.cmd = config?.cmd;
+                is.url = [config?.cfg?.url || ''];
+                await cht.reply(config?.msg || 'ok', { replyAi: false });
+                return ev.emit(config?.cmd);
+              case 'lora':
+                noreply = true;
+                cfg.models = cfg.models || {
+                  checkpoint: 1552,
+                  loras: [2067],
+                };
+                let { checkpoint, loras } = cfg.models;
+                cht.q = `${checkpoint}${JSON.stringify(loras)}|${config?.cfg?.prompt}, soft shading, natural proportions, cinematic lighting|nsfw, nude, naked, cleavage, lingerie, bikini, underwear, sexy, erotic, lewd, seductive, suggestive, provocative,stockings, corset, fishnet, short skirt, exposed body, fat, overweight, bad anatomy, mutation, extra limbs, distorted body, blurry, low quality(02-A2[èŠ©æ½‡åŠŸèƒ½]ä¿®æ‰‹02çœŸäººç‰ˆä¿®æ‰‹-ng_deepnegative_v1_75t:1.5),(worst quality, low quality:2),monochrome,zombie,overexposure,watermark,text,bad anatomy,bad hand,extra hands,((extra fingers)),too many fingers,fused fingers,((bad fingers)),bad arm,distorted arm,((extra arms)),fused arms,extra legs,missing leg,disembodied leg,extra nipples,detached arm,liquid hand,inverted hand,disembodied limb,oversized head,extra body,extra navel,EasyNegative,(hair between eyes),sketch,duplicate,ugly,huge eyes,text,logo,worst face,(blurry:2),horror,geometry,bad_prompt,(bad hands),(missing fingers),multiple limbs,bad anatomy,(interlocked fingers:1.2),Ugly Fingers,(extra digit and hands and fingers and legs and arms:1.4),(deformed fingers:1.2),(long fingers:1.2),bad-artist,bad hand,extra legs,(ng_deepnegative_v1_75t),(badhandv4:1.2),(By bad artist -neg),(bad-picture-chill-75v)`;
+                cht.quoted = {};
+                is.quoted = {};
+                await cht.reply(config?.msg || 'ok', { replyAi: false });
+                return ev.emit('txt2img');
+              case 'txt2img':
+                cht.q = config?.cfg?.prompt || '';
+                await cht.reply(config?.msg || 'ok', { replyAi: false });
+                return ev.emit('dalle3');
+              case 'img2img':
+                cht.q = config?.cfg?.prompt || '';
+                await cht.reply(config?.msg || 'ok', { replyAi: false });
+                return ev.emit('edit', { replyAi: false });
+              case 'pinterest':
+                noreply = true;
+                await cht.reply(config?.msg || 'ok', { replyAi: false });
+                cht.q = config?.cfg?.query || '';
+                return ev.emit(config?.cmd);
+              case 'pinsticker':
+                noreply = true;
+                if (config?.msg)
+                  await cht.reply(config.msg, { replyAi: false });
+                cht.q = config?.cfg?.query || 'anime cute sticker';
+                return ev.emit('pinsticker', { silent: true });
+              case 'closegroup':
+                noreply = true;
+                cht.q = 'close';
+                return ev.emit('group');
+              case 'opengroup':
+                noreply = true;
+                cht.q = 'open';
+                return ev.emit('group');
+              case 'img2video':
+                cht.q = config?.cfg?.prompt || '';
+                await cht.reply(config?.msg || 'ok', { replyAi: false });
+                return ev.emit('i2v');
+              case 'block':
+                noreply = true;
+                await cht.reply(config.msg);
+                await sleep(500);
+                let text =
+                  'âš ï¸ *KAMU TELAH DI BLOKIR!* âš ï¸\n' +
+                  '\n' +
+                  'Interaksi dihentikan, kamu di banned dari bot selama 1hari dan nomormu di blokir karena adanya perilaku yang membuat AI sangat tidak nyaman.\n' +
+                  '\n' +
+                  'Jika kamu merasa ini hanya kesalahpahaman dan ingin membuka blokir, silakan hubungi owner melalui kontak di yang sudah saya kirimkan di private chat.';
+
+                await cht.reply(text, { replyAi: false });
+                await Exp.sendContacts({ id: cht.sender }, owner);
+                await sleep(1000);
+                try {
+                  await Exp.updateBlockStatus(cht.sender, 'block');
+                } catch (e) {
+                  console.error('Exp.updateBlockStatus:', e);
+                }
+                await func.archiveMemories.setItem(
+                  cht.sender,
+                  'banned',
+                  Date.now() + 1 * 60 * 60 * 24 * 1000
+                );
+
+                break;
+            }
+
+            let isStickerRelated = Boolean(
+              isStickerQuery ||
+                config?.cmd === 'pinsticker' ||
+                config?.cmd === 'sticker' ||
+                is?.sticker
+            );
+
+            if (config?.energy && cfg.ai_interactive.energy) {
+              let conf = {};
+              conf.energy = /[+-]/.test(`${config.energy}`)
+                ? `${config.energy}`
+                : `+${config.energy}`;
+              if (conf.energy.startsWith('-')) {
+                conf.action = 'reduceEnergy';
+              } else {
+                conf.action = 'addEnergy';
+              }
+              await memories[conf.action](
+                cht?.sender,
+                parseInt(conf.energy.slice(1))
+              );
+              if (!isStickerRelated) {
+                await cht.reply(config.energy + ' Energy⚡', {
+                  replyAi: false,
+                });
+                config.energyreply = true;
+              }
+            }
+            if (isStickerQuery) {
+              let sq = config.stickerQuery.trim();
+              try {
+                await Exp.sendPresenceUpdate('composing', cht.id);
+                let res = await fetch(
+                  `${api.xterm.url}/api/search/pinterest-image?query=${encodeURIComponent(sq)}&key=${encodeURIComponent(api.xterm.key)}`
+                )
+                  .then((a) => a.json())
+                  .catch(() => null);
+                let data = res?.data;
+                if (data && Array.isArray(data) && data.length > 0) {
+                  let imgUrl = data.slice(0, 20).getRandom();
+                  let buff = await func.getBuffer(imgUrl).catch(() => null);
+                  if (buff) {
+                    await Exp.sendPresenceUpdate('composing', cht.id);
+                    let s = await exif
+                      .writeExifImg(buff, {
+                        packname: botfullname,
+                        author: 'Ⓒ' + (cht.pushName || botnickname),
+                      })
+                      .catch(() => null);
+                    if (s) {
+                      await Exp.sendPresenceUpdate('composing', cht.id);
+                      await sleep(1000);
+                      await Exp.sendMessage(
+                        cht.id,
+                        {
+                          sticker: {
+                            url: s,
+                          },
+                        },
+                        {
+                          quoted: cht,
+                        }
+                      );
+                      await sleep(500);
+                    }
+                  }
+                }
+              } catch (e) {
+                console.error('Direct AI Sticker Error:', e);
+              }
+            }
+            if (config?.cmd !== 'voice' && !noreply) {
+              const method =
+                cfg.editmsg && config?.energyreply ? 'edit' : 'reply';
+
+              function isFormatMsg(lines) {
+                const listRegex = /^[\d\w$&-]+\.\s?.+$/m;
+                const symbolListRegex = /^[$\-&]\s?.+$/m;
+                return lines
+                  .split('\n')
+                  .some(
+                    (a) =>
+                      listRegex.test(a.trim()) || symbolListRegex.test(a.trim())
+                  );
+              }
+
+              if (config?.msg) {
+                if (
+                  cfg.ai_interactive?.partResponse &&
+                  !config.msg.split('\n').some((a) => a.trim().startsWith('**'))
+                ) {
+                  let sp = config.msg.split('\n\n');
+                  for (let line of sp) {
+                    if (!line) return;
+                    let isFormat = isFormatMsg(line);
+                    if (!isFormat) {
+                      let parts = line.split('. ');
+                      for (let part of parts) {
+                        let typing = part.length * 50;
+                        await Exp.sendPresenceUpdate('composing', cht.id);
+                        await sleep(typing);
+                        await cht.reply(part.trim(), { replyAi: false });
+                        await sleep(2000);
+                      }
+                    } else {
+                      let typing = line.length * 50;
+                      await Exp.sendPresenceUpdate('composing', cht.id);
+                      await sleep(typing);
+                      await cht.reply(line.trim(), { replyAi: false });
+                      await sleep(2000);
+                    }
+                  }
+                } else {
+                  let replyOpts = { ...keys[sender] };
+                  if (videoSkipped)
+                    replyOpts.footer = `${botnickname} tidak bisa membaca video berdurasi lebih dari 60 detik`;
+                  await cht[method](config.msg, replyOpts);
+                }
+              }
+            }
+          } catch (error) {
+            console.error('Error parsing AI response:', error);
+          }
+        }
+        break;
+      case isSalam:
+        cht.reply("Wa'alaikumussalaam...", { replyAi: false });
+        break;
+
+      case isAntiTagOwner:
+        {
+          let message = Data.response['tagownerresponse'];
+          if (message) {
+            let type = getContentType(message);
+            message[type].contextInfo = {
+              stanzaId: cht.key.id,
+              participant: cht.key.participant || cht?.quoted?.key.remoteJid,
+              quotedMessage: cht,
+            };
+            Exp.relayMessage(cht.id, message, {});
+          } else {
+            cht.reply('😡', { replyAi: false });
+          }
+        }
+        break;
+      case is.autosticker:
+        ev.emit('s');
+        break;
+      case isResponse:
+        {
+          let message = Data.response[Response];
+          let type = getContentType(message);
+          if (typeof message[type] === 'object') {
+            message[type].contextInfo = {
+              stanzaId: cht.key.id,
+              participant: cht.key.participant || cht?.quoted?.key.remoteJid,
+              quotedMessage: cht,
+              mentionedJid: message[type]?.contextInfo?.mentionedJid,
+            };
+          }
+          Exp.relayMessage(cht.id, message, {});
+        }
+        break;
+
+      case is.autodownload:
+        {
+          downCmd &&
+            (await cht.reply(
+              `*AUTO DOWNLOAD*\n _Link *${downCmd.slice(0, 1).toUpperCase() + downCmd.slice(1)}* terdeteksi!_`
+            ));
+          downCmd &&
+            ev.emit(
+              downCmd == 'github'
+                ? 'gitclone'
+                : downCmd == 'youtube'
+                  ? 'ytm4a'
+                  : downCmd == 'pinterest'
+                    ? 'pinterestdl'
+                    : downCmd
+            );
+        }
+        break;
+    }
+    keys.isBack ??= {};
+    if (
+      chatDb.autoback &&
+      _url &&
+      is.group &&
+      !is.admin &&
+      !is.owner &&
+      !is.coowner
+    ) {
+      try {
+        let inviteMatch = _url.match(/chat\.whatsapp\.com\/([\w-]+)/);
+        if (!inviteMatch) return;
+        let { id: idgc, groupApprovalMode } = await Exp.groupGetInviteInfo(
+          inviteMatch[1]
+        );
+        if (groupApprovalMode) return;
+        let inviteCode = await Exp.groupInviteCode(cht.id);
+        let isBack = !inviteMatch[1].includes(inviteCode);
+        if (isBack && !keys.isBack[inviteMatch[1]]) {
+          keys.isBack[inviteMatch[1]] = true;
+          await Exp.groupAcceptInvite(inviteMatch[1]);
+          await sleep(400);
+          await Exp.sendMessage(idgc, {
+            text: `*Auto Back*\n\nHai semua, jangan lupa join grup aku ya \n\nhttps://chat.whatsapp.com/${inviteCode}`,
+            footer:
+              '- Pesan ini dikirim otomatis karena ada member dari grup ini yang share link grupnya ke grup kami.\n_bot keluar otomatis dalam 3 detik_',
+          });
+          await sleep(3000);
+          await Exp.groupLeave(idgc);
+
+          await cht.reply(`*Auto Back Berhasil*
+
+Bot sudah join ke grup tersebut, ngirim link grup ini sebagai balasan, lalu keluar lagi ðŸ™‚
+`);
+        }
+      } catch (e) {
+        console.error(e);
+        await cht.reply('*Auto Back Gagal* â—', { foote: e });
+      }
+    }
+  } catch (error) {
+    console.error('Error in Interactive:', error);
+  }
+}
