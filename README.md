@@ -4,6 +4,8 @@ oh ya untuk full script botnya bisa download dari repo pembuatnya ya🗿👍
 Backup dulu jembut data botmu. soalnya banyak yang saya timpa😹
 di toolkit/set/config.json kena timpa full
 
+setelah itu hapus folder node_modules ya biae install ulang pakai elaina-baileys
+
 ---
 
 # AgakAgakJir-
