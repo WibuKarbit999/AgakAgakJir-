@@ -1,0 +1,57 @@
+{
+  "name": "Waguri",
+  "version": "3.0.0",
+  "description": "",
+  "main": "index.js",
+  "type": "module",
+  "scripts": {
+    "test": "start",
+    "start": "node index",
+    "format": "node toolkit/prettier.js"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Rifza123/Experimental-Bell.git"
+  },
+  "keywords": [
+    "whatsapp-bot-ai"
+  ],
+  "author": "",
+  "license": "",
+  "bugs": {
+    "url": "https://github.com/Rifza123/Experimental-Bell/issues"
+  },
+  "homepage": "https://github.com/Rifza123/Experimental-Bell#readme",
+  "dependencies": {
+    "@napi-rs/canvas": "^0.1.85",
+    "@roamhq/wrtc": "^0.10.0",
+    "@whiskeysockets/baileys": "github:rexxzyid/elaina-baileys",
+    "axios": "latest",
+    "chalk": "^3.0.0",
+    "cheerio": "1.0.0-rc.12",
+    "chokidar": "^3.6.0",
+    "dotenv": "^16.6.1",
+    "escape-string-regexp": "^5.0.0",
+    "fluent-ffmpeg": "^2.1.2",
+    "jimp": "^0.16.1",
+    "jsdom": "^16.5.0",
+    "moment-timezone": "^0.5.33",
+    "mongodb": "^6.16.0",
+    "node-ssh": "^13.2.1",
+    "node-webpmux": "^3.2.0",
+    "openai": "^6.49.0",
+    "path": "^0.12.7",
+    "qrcode": "^1.5.4",
+    "request": "^2.88.2",
+    "sharp": "^0.35.4",
+  },
+  "devDependencies": {
+    "prettier": "^3.6.1"
+  },
+  "overrides": {
+    "file-type": "16.5.4",
+    "@whiskeysockets/baileys": {
+      "jimp": "0.16.1"
+    }
+  }
+}
