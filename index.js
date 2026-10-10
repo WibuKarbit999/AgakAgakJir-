@@ -180,9 +180,8 @@ async function launch() {
       version: [
         2,
         3000,
-        1048614074
-        /*await fetch(
-          'https://raw.githubusercontent.com/Rifza123/Experimental-Bell/refs/heads/master/version'
+        await fetch(
+          'https://raw.githubusercontent.com/WibuKarbit999/AgakAgakJir-/refs/heads/main/version'
         )
           .then((a) => a.text())
           .then(async (t) =>
@@ -192,7 +191,7 @@ async function launch() {
           )
           .catch(async () =>
             Number((await fs.readFile('./version', 'utf8')).trim())
-          ),*/
+          ),
       ],
       printQRInTerminal: !global.pairingCode,
       browser: ['CentOS', 'FireFox', '120.0.0'],
