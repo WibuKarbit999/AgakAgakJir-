@@ -1363,7 +1363,8 @@ export default async function In({ cht, Exp, store, is, ev, chatDb, sewaDb }) {
                 cht.cmd = 'wakecall';
                 cht.q = q;
                 if (config?.msg) await cht.reply(config.msg, { replyAi: false });
-                return ev.emit('wakecall', { args: q, via: 'ai' });
+                cht.wakeVia = 'ai';
+                return ev.emit('wakecall', { args: q });
               }
               case 'aicall':
               case 'playcall': {
