@@ -84,28 +84,37 @@ const MAX_TURNS = 20; // 20 pasang user+assistant terakhir per user
 const REQUEST_TIMEOUT = 30000; // 60 detik
 const MEMORY_FILE = path.join(process.cwd(), 'toolkit/db/aimemory.json');
 
-const chatMemory = new Map(); // id -> history[]
+// PENTING: modul ini di-import ulang lewat .r() (?v=timestamp) dari interactive.js & aicall.js, jadi
+// setiap importer dapat salinan modul sendiri. Kalau Map dan timer simpan-nya per salinan, tiap salinan
+// menimpa aimemory.json dengan isi Map-nya sendiri (data yang dihapus hidup lagi, data baru hilang).
+// Solusi: Map, flag load, dan timer disimpan di globalThis supaya SEMUA salinan berbagi satu memori.
+const chatMemory = (globalThis.__aiChatMemory ??= new Map()); // id -> history[]
 
-try {
-  if (fs.existsSync(MEMORY_FILE)) {
-    const saved = JSON.parse(fs.readFileSync(MEMORY_FILE, 'utf8'));
-    for (const [id, history] of Object.entries(saved)) chatMemory.set(id, history);
+if (!globalThis.__aiChatMemoryLoaded) {
+  globalThis.__aiChatMemoryLoaded = true;
+  try {
+    if (fs.existsSync(MEMORY_FILE)) {
+      const saved = JSON.parse(fs.readFileSync(MEMORY_FILE, 'utf8'));
+      for (const [id, history] of Object.entries(saved)) chatMemory.set(id, history);
+    }
+  } catch (e) {
+    console.warn('[Reasoner] Gagal load memori:', e.message);
   }
-} catch (e) {
-  console.warn('[Reasoner] Gagal load memori:', e.message);
 }
 
-let saveTimer;
-function persist() {
-  clearTimeout(saveTimer);
-  saveTimer = setTimeout(() => {
-    try {
-      fs.mkdirSync(path.dirname(MEMORY_FILE), { recursive: true });
-      fs.writeFileSync(MEMORY_FILE, JSON.stringify(Object.fromEntries(chatMemory)));
-    } catch (e) {
-      console.error('[Reasoner] Gagal simpan memori:', e.message);
-    }
-  }, 2000);
+function writeMemoryNow() {
+  try {
+    fs.mkdirSync(path.dirname(MEMORY_FILE), { recursive: true });
+    fs.writeFileSync(MEMORY_FILE, JSON.stringify(Object.fromEntries(chatMemory)));
+  } catch (e) {
+    console.error('[Reasoner] Gagal simpan memori:', e.message);
+  }
+}
+
+function persist(immediate = false) {
+  clearTimeout(globalThis.__aiSaveTimer);
+  if (immediate) return writeMemoryNow();
+  globalThis.__aiSaveTimer = setTimeout(writeMemoryNow, 2000);
 }
 
 function getHistory(id) {
@@ -126,9 +135,18 @@ function appendAssistantMemory(id, text) {
   saveHistory(id, h);
 }
 
+/** Hapus semua riwayat milik satu user: id utama (jid) + memori telpon (aicall:) + chat susulan (wifecall-ngambek:). */
 function resetMemory(id) {
-  const had = chatMemory.delete(id);
-  persist();
+  const num = String(id || '').split('@')[0].replace(/\D/g, '');
+  let had = false;
+  for (const key of [...chatMemory.keys()]) {
+    const keyNum = String(key).split('@')[0].replace(/^[a-z-]+:/i, '');
+    if (key === id || (num && keyNum === num)) {
+      chatMemory.delete(key);
+      had = true;
+    }
+  }
+  persist(true); // tulis ke aimemory.json sekarang juga, jangan tunggu debounce
   return had;
 }
 
@@ -283,10 +301,15 @@ async function postJson(url, key, payload) {
 }
 
 /** Coba satu model di satu provider: JSON mode -> (kalau ditolak 400) tanpa JSON mode -> retry 429/5xx. */
-async function tryModel(provider, model, messages) {
+async function tryModel(provider, model, messages, opts = {}) {
   const url = `${provider.url}/chat/completions`;
-  const base = { model, messages, temperature: TEMPERATURE }; 
-  const attempts = [{ ...base, response_format: { type: 'json_object' } }, base, base];
+  const base = { model, messages, temperature: TEMPERATURE };
+  // opts.reasoning (mis. 'minimal'): matikan/kurangi thinking supaya balasan cepat (dipakai mode telpon).
+  // Model yang menolak parameter ini diingat (globalThis) supaya tidak dicoba lagi tiap giliran.
+  const noReason = (globalThis.__aiNoReasoning ??= new Set());
+  const effort = opts.reasoning && !noReason.has(model) ? String(opts.reasoning).toLowerCase() : '';
+  const withR = effort ? { ...base, reasoning_effort: effort } : base;
+  const attempts = [{ ...withR, response_format: { type: 'json_object' } }, withR, base];
   let lastErr;
   for (let i = 0; i < attempts.length; i++) {
     try {
@@ -300,7 +323,10 @@ async function tryModel(provider, model, messages) {
         break;
       }
       const retryable = res.status === 429 || res.status >= 500;
-      if (i === 0 && res.status === 400) continue; 
+      if (res.status === 400 && i < 2) {
+        if (i === 1 && effort) noReason.add(model); // JSON mode sudah dicoret, masih 400 -> reasoning_effort yang ditolak
+        continue;
+      }
       if (!retryable) break;
       await new Promise((r) => setTimeout(r, 800));
     } catch (e) {
@@ -314,7 +340,7 @@ async function tryModel(provider, model, messages) {
   throw lastErr;
 }
 
-async function callProviderAPI(messages, preferredModel) {
+async function callProviderAPI(messages, preferredModel, opts = {}) {
   const cfg = getActiveAiConfig();
   const models = [...new Set([preferredModel, ...cfg.models].filter(Boolean))];
   if (!cfg.providers.length) throw new Error('config.json: API URL belum diisi');
@@ -324,7 +350,7 @@ async function callProviderAPI(messages, preferredModel) {
     const provider = cfg.providers[p];
     for (let m = 0; m < models.length; m++) {
       try {
-        const completion = await tryModel(provider, models[m], messages);
+        const completion = await tryModel(provider, models[m], messages, opts);
         if (p > 0 || m > 0) {
           console.warn(`[Reasoner] Pakai cadangan -> provider: ${provider.url}, model: ${models[m]}`);
         }
@@ -450,13 +476,13 @@ async function ai(body = {}) {
 
     const messages = [
       { role: 'system', content: systemPrompt },
-      ...history,
+      ...(body.historyLimit > 0 ? history.slice(-body.historyLimit) : history), // telpon: cukup beberapa pesan terakhir
       { role: 'user', content: userContent },
     ];
 
     let completion;
     try {
-      completion = await callProviderAPI(messages, body.model);
+      completion = await callProviderAPI(messages, body.model, { reasoning: body.reasoning });
     } catch (e) {
       if (!(cfg.fallbackTermai && XTERM_KEY)) throw e;
       console.warn('[Reasoner] Semua model gagal, fallback ke termai.');
@@ -473,8 +499,8 @@ async function ai(body = {}) {
         rayuan: Number(d.rayuan) || 0,
         energyreply: Boolean(d.energyreply),
       };
-      console.log('[Reasoner] mood=', out.mood, '| role=', out.newRole || body.role, '| cmd=', out.cmd);
-      history.push({ role: 'user', content: body.text || '[Mengirim Media]' });
+      //console.log('[Reasoner] mood=', out.mood, '| role=', out.newRole || body.role, '| cmd=', out.cmd);
+      if (!body.synthetic) history.push({ role: 'user', content: body.text || '[Mengirim Media]' }); // prompt sistem bukan ucapan user
       history.push({ role: 'assistant', content: out.msg || '(Menjalankan perintah)' });
       saveHistory(userId, history);
       return { data: out };
@@ -493,9 +519,9 @@ async function ai(body = {}) {
     const newRole = guardRole(data.newRole, body.role);
     const mood = sanitizeNullish(data.mood) || body.mood || null;
 
-    console.log('[Reasoner] mood=', mood, '| role=', newRole || body.role, '| cmd=', cmd, '| msg=', (msg || '').slice(0, 80));
+    //console.log('[Reasoner] mood=', mood, '| role=', newRole || body.role, '| cmd=', cmd, '| msg=', (msg || '').slice(0, 80));
 
-    history.push({ role: 'user', content: body.text || '[Mengirim Media]' });
+    if (!body.synthetic) history.push({ role: 'user', content: body.text || '[Mengirim Media]' }); // prompt sistem bukan ucapan user
     history.push({ role: 'assistant', content: msg || '(Menjalankan perintah)' });
     saveHistory(userId, history);
 
