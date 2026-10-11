@@ -203,7 +203,7 @@ export default async function client({ Exp, store, cht, is, chatDb, sewaDb }) {
     try {
       const wmod = (global.__wifemood ??= await `${fol[1]}wifemood.js`.r());
       wmod.touch(wmod.uidOf(cht.sender));
-      globalThis.__aicallApi?.wakeSeen?.(await func.getSender(cht.sender, { cht, lid: false }));
+      globalThis.__aicallApi?.wakeSeen?.(await func.getSender(cht.sender, { cht, lid: false }), cht.msg);
     } catch {}
   } catch (error) {
     console.error('Error in client.js:', error);
