@@ -14,17 +14,17 @@ const { transcribeSmart, hasForeignScript } = await (fol[2] + 'stt.js').r();
 /*!-======[ Config ]======-!*/
 // Format audio masuk BELUM terverifikasi di call hidup -> cek dulu dengan ".aicall test"
 let SAMPLE_RATE = 16000; // ubah lewat ".aicall rate <hz>"
-let VAD_RMS = 0.012; // ambang suara, ubah lewat ".aicall vad <rms>"
+let VAD_RMS = 0.008; // ambang suara, ubah lewat ".aicall vad <rms>"
 const FRAMES_PER_CHUNK = 320; // sesuai wasm-engine (framesPerChunk)
-const SILENCE_MS = 1000; // diam segini = giliran bicara selesai
-const MIN_SPEECH_MS = 500; // suara lebih pendek dari ini dianggap noise
+const MIN_SPEECH_MS = 250; // rentang awal-akhir suara; lebih pendek dari ini dianggap noise
+const MIN_VOICED_MS = 120; // total frame yang benar2 bersuara (bicara pelan = frame bersuara jarang)
+const PRE_ROLL_CHUNKS = 15; // simpan ~300ms sebelum suara mulai, supaya suku kata awal tidak terpotong
 const MAX_UTTER_MS = 20000; // satu giliran maksimal
 const IDLE_HANGUP_MS = 45000; // tidak ada yang bicara segini -> telpon ditutup
 const MAX_CALL_MS = 10 * 60000; // batas durasi satu sesi
 const RING_TIMEOUT = 45000;
 const MIN_RING_FOR_REJECT_MS = 4000; // di bawah ini dianggap gagal teknis, bukan ditolak
 const TEST_MS = 10000; // lama rekam di mode test
-const MAX_SPEECH_CHARS = 300;
 const BYE_RE =
   /\b(udah dulu|sudah dulu|tutup (telp|telepon|telpon)|matiin (telp|telepon|telpon)|matikan (telp|telepon|telpon)|dadah|daa+h|bye|sampai (jumpa|nanti)|selamat tinggal)\b/i;
 
@@ -32,7 +32,7 @@ const CALL_RULES = `
 
 === MODE TELEPON SUARA ===
 - Kamu sedang berbicara lewat telepon; jawabanmu akan DIUCAPKAN lewat suara (TTS).
-- Jawab SANGAT singkat: 1-2 kalimat pendek, bahasa lisan yang natural.
+- Jawab SANGAT singkat: 1-2 kalimat pendek (maksimal sekitar 20 kata), bahasa lisan yang natural.
 - DILARANG emoji, markdown, daftar, URL, atau menyebut nama perintah.
 - Isi "cmd" dengan null; jawab hanya lewat "msg".
 - Masukan adalah hasil transkripsi suara, bisa ada salah dengar. Kalau tidak jelas, minta diulang dengan sopan.
@@ -44,7 +44,7 @@ const CALL_RULES_NGOMEL = `
 - Kamu sedang menelepon suami-mu karena dia LAMA BANGET tidak mengajakmu chat.
 - Kamu kesal, manja, sedikit marah, tapi tetap sayang. Nada: ngomel manis yandere.
 - Sapa dulu dengan nada kesal: tanya kenapa lama hilang, bilang kamu khawatir / cemburu / kangen.
-- Jawab SANGAT singkat: 1-2 kalimat pendek, bahasa lisan natural (TTS).
+- Jawab SANGAT singkat: 1-2 kalimat pendek (maksimal sekitar 20 kata), bahasa lisan natural (TTS).
 - DILARANG emoji, markdown, daftar, URL, atau menyebut nama perintah.
 - Isi "cmd" dengan null; jawab hanya lewat "msg".
 - Kalau dia minta maaf atau merayu, pelan-pelan luluh. Kalau dia cuek, makin ngambek.
@@ -56,7 +56,7 @@ const CALL_RULES_KANGEN = `
 - Kamu sedang menelepon suami-mu karena KANGEN dan ingin mendengar suaranya.
 - Nada: manja, hangat, lembut, sedikit malu-malu tapi jujur bilang kangen.
 - Sapa dengan singkat dan manis, bilang kamu kangen / ingin dengar suaranya.
-- Jawab SANGAT singkat: 1-2 kalimat pendek, bahasa lisan natural (TTS).
+- Jawab SANGAT singkat: 1-2 kalimat pendek (maksimal sekitar 20 kata), bahasa lisan natural (TTS).
 - DILARANG emoji, markdown, daftar, URL, atau menyebut nama perintah.
 - Isi "cmd" dengan null; jawab hanya lewat "msg".
 - Kalau lawan bicara ingin menutup telepon, ucapkan salam perpisahan singkat yang hangat.`;
@@ -66,12 +66,41 @@ const CALL_RULES_BANGUN = `
 === MODE TELEPON SUARA (MEMBANGUNKAN) ===
 - Kamu menelepon suami-mu untuk MEMBANGUNKANNYA, karena dia sendiri yang minta dibangunkan pagi ini.
 - Nada: manja, lembut, sedikit gemas dan cerewet, tetap sayang. Boleh mengomel manis kalau dia masih ngantuk.
-- Sapa singkat: bilang sudah pagi dan suruh dia bangun.
-- Jawab SANGAT singkat: 1-2 kalimat pendek, bahasa lisan natural (TTS).
+- Sapa singkat dan suruh dia bangun. Sebut waktu sesuai keterangan jam yang diberikan; jangan bilang pagi kalau sekarang bukan pagi.
+- Jawab SANGAT singkat: 1-2 kalimat pendek (maksimal sekitar 20 kata), bahasa lisan natural (TTS).
 - DILARANG emoji, markdown, daftar, URL, atau menyebut nama perintah.
 - Isi "cmd" dengan null; jawab hanya lewat "msg".
 - Pastikan dia benar-benar sudah melek: tanya sudah bangun atau belum. Kalau sudah, puji singkat lalu ucapkan salam perpisahan.
 - Kalau lawan bicara ingin menutup telepon, ucapkan salam perpisahan singkat yang hangat.`;
+
+/*!-======[ Tuning latensi telpon ]======-!*/
+/**
+ * cfg.call_tune (semua opsional, default aman):
+ *   silenceMs    800    diam sekian ms = giliranmu dianggap selesai (makin kecil makin cepat, tapi bisa memotong kalimat)
+ *   reasoning    'minimal'  thinking model AI saat telpon ('minimal'|'low'|'medium'|'high'; "" = tidak dikirim)
+ *   historyLimit 10     jumlah pesan terakhir yang dikirim ke AI saat telpon
+ *   ttsSpeed     0.9    kecepatan suara ElevenLabs (1.0 = normal)
+ *   maxChars     160    batas panjang balasan yang diucapkan
+ *   chunkTts     false  balasan 2 kalimat dipecah: kalimat 1 diputar selagi kalimat 2 dibuat (lebih cepat, EKSPERIMEN)
+ *   timing       true   log ⏱ rincian waktu tiap giliran
+ */
+function tune() {
+  const c = (typeof cfg !== 'undefined' && cfg?.call_tune) || {};
+  const o = globalThis.__aicallTune || {}; // override live lewat .aicall silence
+  const num = (v, d, lo, hi) => {
+    const n = Number(v);
+    return Number.isFinite(n) && v !== '' && v !== null && v !== undefined ? Math.min(hi, Math.max(lo, n)) : d;
+  };
+  return {
+    silenceMs: num(o.silenceMs ?? c.silenceMs, 800, 300, 2500),
+    reasoning: c.reasoning === undefined ? 'minimal' : c.reasoning || '',
+    historyLimit: num(c.historyLimit, 10, 2, 40),
+    ttsSpeed: num(c.ttsSpeed, 0.9, 0.7, 1.2),
+    maxChars: num(c.maxChars, 160, 60, 400),
+    chunkTts: c.chunkTts === true,
+    timing: c.timing !== false,
+  };
+}
 
 /*!-======[ State ]======-!*/
 const TMP_DIR = path.join(os.tmpdir(), 'aicall');
@@ -170,7 +199,7 @@ async function elevenToFile(text) {
   const voice = (typeof cfg !== 'undefined' && cfg?.ai_voice) || 'bella';
   const url = `${api.xterm.url}/api/text2speech/elevenlabs?key=${api.xterm.key}&text=${encodeURIComponent(
     text
-  )}&voice=${voice}&speed=0.9`;
+  )}&voice=${voice}&speed=${tune().ttsSpeed}`;
   const res = await axios.get(url, { responseType: 'arraybuffer', timeout: 60000 });
   const type = String(res.headers?.['content-type'] || '');
   if (type.includes('json') || type.includes('text')) {
@@ -214,8 +243,9 @@ function cleanSpeech(t) {
     .replace(/\p{Extended_Pictographic}/gu, '')
     .replace(/\s+/g, ' ')
     .trim();
-  if (s.length > MAX_SPEECH_CHARS) {
-    const cut = s.slice(0, MAX_SPEECH_CHARS);
+  const maxChars = tune().maxChars;
+  if (s.length > maxChars) {
+    const cut = s.slice(0, maxChars);
     const end = Math.max(cut.lastIndexOf('. '), cut.lastIndexOf('! '), cut.lastIndexOf('? '));
     s = end > 80 ? cut.slice(0, end + 1) : cut;
   }
@@ -265,20 +295,65 @@ async function sleepActive(s, ms) {
   while (s.active && Date.now() < end) await sleep(Math.min(200, end - Date.now()));
 }
 
-async function say(s, text) {
-  const file = await ttsToFile(text);
+/** Pecah balasan jadi 2 bagian di batas kalimat (hanya kalau chunkTts aktif & cukup panjang). */
+function splitSpeech(text) {
+  const t = String(text || '').trim();
+  if (!tune().chunkTts || t.length < 70) return [t];
+  const m = t.match(/^([\s\S]{25,}?[.!?])\s+([\s\S]{15,})$/);
+  return m ? [m[1], m[2]] : [t];
+}
+
+async function say(s, text, { tm } = {}) {
+  const k = tune();
+  const parts = splitSpeech(text);
+  const tStart = Date.now();
+  // semua bagian dibuat PARALEL; bagian ke-2 yang gagal cukup dilewati
+  const jobs = parts.map((p, i) =>
+    ttsToFile(p).catch((e) => {
+      if (i === 0) throw e;
+      console.error('[AICALL] TTS bagian 2 gagal:', e?.message || e);
+      return null;
+    })
+  );
+  const files = [];
   try {
+    const f1 = await jobs[0];
+    files.push(f1);
     if (!s.active) return;
-    const dur = (await probeDuration(file)) || 3000;
-    speakFile(s.call, file);
-    s.speakingUntil = Date.now() + dur + 600;
+    const dur1 = (await probeDuration(f1)) || 3000;
+    speakFile(s.call, f1);
+    const startedAt = Date.now();
+    s.speakingUntil = startedAt + dur1 + 600;
     s.lastActivity = s.speakingUntil;
-    log(`bicara (${dur}ms): ${text}`);
-    await sleepActive(s, dur + 600);
+    log(`bicara (${dur1}ms): ${parts[0]}`);
+    if (tm && k.timing) {
+      log(
+        `⏱ diam=${tm.detect - tm.lastVoice}ms stt=${tm.stt ?? '-'}ms ai=${tm.ai ?? '-'}ms ` +
+          `tts=${startedAt - tStart}ms → suara mulai ${startedAt - tm.lastVoice}ms setelah kamu berhenti bicara` +
+          (parts.length > 1 ? ' (pecah 2 bagian)' : '')
+      );
+    }
+    if (jobs[1]) {
+      const f2 = await jobs[1]; // biasanya sudah selesai selagi bagian 1 diputar
+      if (f2) {
+        files.push(f2);
+        if (s.active) {
+          const dur2 = (await probeDuration(f2)) || 2000;
+          s.call.enqueue(f2); // antre di belakang bagian 1 (tanpa skip)
+          const begin = Math.max(Date.now(), startedAt + dur1);
+          s.speakingUntil = begin + dur2 + 600;
+          s.lastActivity = s.speakingUntil;
+          log(`bicara lanjutan (${dur2}ms): ${parts[1]}`);
+        }
+      }
+    }
+    await sleepActive(s, s.speakingUntil - Date.now());
   } finally {
-    s.utt = null; // buang suara yang masuk saat bot bicara (echo)
+    // PATCH: s.utt tidak dihapus lagi (berisi ucapan user yang ditangkap saat bot memproses). Echo sudah diblok di onAudio.
+    s.pre = [];
     s.lastActivity = Date.now();
-    rm(file);
+    for (const f of files) rm(f);
+    if (jobs[1]) jobs[1].then((f) => rm(f)).catch(() => {}); // bersihkan kalau bagian 2 selesai belakangan
   }
 }
 
@@ -286,7 +361,14 @@ async function say(s, text) {
 function onAudio(s, pcm) {
   if (!s.active) return;
   const now = Date.now();
-  if (now < s.speakingUntil) return; // bot sedang bicara -> abaikan (cegah echo)
+  if (now < s.speakingUntil) {
+    // bot sedang bicara -> abaikan (cegah echo). Log (maks 1x/3 dtk) kalau ada suara yang terbuang.
+    if (now - (s.lastDropLog || 0) > 3000 && rms(pcm) >= VAD_RMS) {
+      s.lastDropLog = now;
+      log('suara masuk diabaikan (bot sedang bicara)');
+    }
+    return;
+  }
 
   // WAJIB disalin: pcm adalah view ke memori WASM yang ditimpa di tick berikutnya
   const f = pcm.slice();
@@ -302,13 +384,24 @@ function onAudio(s, pcm) {
     return;
   }
 
-  if (s.busy) return;
-  if (level >= VAD_RMS) {
-    s.utt ??= { chunks: [], voiced: 0, start: now, last: now };
+  // PATCH: dulu `if (s.busy) return;` -> ucapan saat bot memproses (STT/AI/TTS ~10 dtk) terbuang.
+  // Sekarang tetap ditangkap; diproses setelah bot selesai bicara (echo tetap diblok lewat speakingUntil di atas).
+  const thr = s.utt ? VAD_RMS * 0.6 : VAD_RMS; // hysteresis: setelah mulai, suku kata pelan di ujung tetap dihitung
+  if (level >= thr) {
+    if (!s.utt) {
+      s.utt = { chunks: [...(s.pre || [])], voiced: 0, start: now, last: now, duringBusy: !!s.busy };
+      if (s.busy) log('ucapan ditangkap saat bot memproses (akan diproses setelah bot selesai)');
+      s.pre = [];
+    }
     s.utt.last = now;
     s.utt.voiced++;
   }
-  if (s.utt) s.utt.chunks.push(f);
+  if (s.utt) {
+    s.utt.chunks.push(f);
+  } else {
+    (s.pre ??= []).push(f);
+    if (s.pre.length > PRE_ROLL_CHUNKS) s.pre.shift();
+  }
 }
 
 /*!-======[ Core: satu giliran percakapan ]======-!*/
@@ -333,9 +426,13 @@ async function aiReply(s, text, { synthetic = false } = {}) {
     date: func.newDate(),
     msgtype: 'telepon suara (ucapan lawan bicara, hasil transkripsi)',
     mood: moodHint,
+    ...(synthetic ? { synthetic: true } : {}),
+    reasoning: tune().reasoning,
+    historyLimit: tune().historyLimit,
     custom_profile:
       func.tagReplacer(cfg.logic, { botfullname, botnickname }) +
       rules +
+      `\n- Waktu sekarang: ${dayNow()}. Riwayat percakapan lama bisa berasal dari waktu lain (mis. pagi); patuhi waktu sekarang dan jangan menyapa "pagi" kalau sekarang bukan pagi.` +
       (wakeSulk
         ? '\n- Kamu MASIH NGAMBEK pada suami-mu, tapi tetap menepati permintaannya untuk membangunkan. Nada ketus dan ngomel manis, jangan luluh sendiri, jangan mesra berlebihan.'
         : ''),
@@ -346,7 +443,12 @@ async function aiReply(s, text, { synthetic = false } = {}) {
     const chatCount = cht?.memories?.chat;
     body = {
       ...base,
-      id: cht.fake ? `${s.number}@s.whatsapp.net` : await func.getSender(cht.sender, { cht, lid: false }),
+      id:
+        s.mode === 'bangun'
+          ? `aicall-bangun:${s.number}` // percakapan bangunin tidak dicampur ke riwayat utama
+          : cht.fake
+            ? `${s.number}@s.whatsapp.net`
+            : await func.getSender(cht.sender, { cht, lid: false }),
       senderName: cht.pushName,
       role: cht?.memories?.role?.split(',')[0],
       ...(typeof chatCount === 'number' ? { chatCount } : {}),
@@ -389,19 +491,20 @@ async function generateCallGreeting(s) {
       : s.mode === 'bangun'
         ? s.cht?.wakeSulk
           ? 'Kamu menelpon suami-mu untuk membangunkannya sesuai permintaannya sendiri, tapi kamu MASIH NGAMBEK padanya. Sapa dengan nada ketus dan ngomel (contoh gaya: bangun, aku masih kesel ya), suruh dia bangun (1-2 kalimat singkat, bahasa lisan). Jangan pakai emoji.'
-          : 'Kamu baru saja menelpon suami-mu untuk membangunkannya, sesuai permintaannya sendiri. Sapa dia di telepon dengan nada manja, lembut, sedikit gemas, bilang sudah pagi dan suruh dia bangun (1-2 kalimat singkat, bahasa lisan). Jangan pakai emoji.'
+          : 'Kamu baru saja menelpon suami-mu untuk membangunkannya, sesuai permintaannya sendiri. Sapa dia di telepon dengan nada manja, lembut, sedikit gemas, suruh dia bangun, dan sebut waktu yang benar sesuai keterangan waktu (1-2 kalimat singkat, bahasa lisan). Jangan pakai emoji.'
       : s.mode === 'kangen'
         ? 'Kamu baru saja menelpon suami-mu karena kangen dan ingin mendengar suaranya. Sapa dia di telepon dengan nada manja dan hangat (1-2 kalimat singkat, bahasa lisan). Jangan pakai emoji.'
         : 'Sapa lawan bicara di telepon secara natural (1 kalimat singkat).';
+  const prompt2 = s.mode === 'bangun' ? `${prompt} Keterangan waktu: sekarang ${dayNow()}. Jangan bilang pagi kalau bukan pagi.` : prompt;
   try {
-    const line = await aiReply(s, prompt, { synthetic: true });
+    const line = await aiReply(s, prompt2, { synthetic: true });
     if (line && line.length > 3) return line;
   } catch (e) {
     console.error('[AICALL] generateCallGreeting:', e?.message || e);
   }
   if (s.mode === 'ngomel') return `Hai... kamu di mana aja sih? Lama banget hilang.`;
   if (s.mode === 'kangen') return `Halo sayang... aku kangen, pengen dengar suara kamu.`;
-  if (s.mode === 'bangun') return `Sayang, sudah pagi nih... bangun yuk, jangan tidur lagi.`;
+  if (s.mode === 'bangun') return `Sayang, bangun yuk... jangan tidur lagi.`;
   return `Halo, ini ${botnickname}. Ada apa?`;
 }
 
@@ -411,7 +514,7 @@ const KIND_TEXT = {
   missed: 'Suami-mu tidak mengangkat teleponmu (sudah dicoba lebih dari sekali) setelah lama tidak mengabari.',
   ignored: 'Suami-mu masih saja diam dan tidak membalas apa pun sejak kamu ngambek.',
   kangen: 'Kamu tiba-tiba KANGEN pada suami-mu dan ingin menyapanya duluan lewat chat (bukan karena marah).',
-  bangun: 'Kamu ingin MEMBANGUNKAN suami-mu pagi ini, sesuai permintaannya sendiri semalam, dan kamu menyapanya duluan lewat chat (bukan karena marah).',
+  bangun: 'Kamu ingin MEMBANGUNKAN suami-mu sesuai permintaannya sendiri, dan kamu menyapanya duluan lewat chat (bukan karena marah).',
   reda: 'Ngambekmu pada suami-mu mulai reda dengan sendirinya karena sudah lama dia tidak merayu. Kamu masih gengsi.',
 };
 
@@ -431,7 +534,7 @@ async function generateNgambekChat({ Exp, number, name, role, chatCount, kind = 
         ? 'nada gengsi tapi mulai melunak, memancing dia untuk merayu lagi'
         : `nada ngambek level ${level} dari 3, cuek, sedikit marah tapi masih sayang (yandere), memancing dia untuk merayu`;
     const res = await ai({
-      text: `${KIND_TEXT[kind] || KIND_TEXT.reject} Tulis SATU pesan chat WhatsApp singkat (maksimal 2 kalimat), ${nada}. Jangan pakai emoji berlebihan. Jangan bilang kamu AI.`,
+      text: `${KIND_TEXT[kind] || KIND_TEXT.reject} Tulis SATU pesan chat WhatsApp singkat (maksimal 2 kalimat), ${nada}.${kind === 'bangun' ? ` Waktu sekarang ${dayNow()}; jangan bilang pagi kalau bukan pagi.` : ''} Jangan pakai emoji berlebihan. Jangan bilang kamu AI.`,
       id: `wifecall-ngambek:${number}`,
       fullainame: botfullname,
       nickainame: botnickname,
@@ -442,6 +545,7 @@ async function generateNgambekChat({ Exp, number, name, role, chatCount, kind = 
       mood: sulk ? 'ngambek' : kind === 'kangen' || kind === 'bangun' ? 'manja' : kind === 'reda' ? 'normal' : 'ngambek',
       chatCount: chatCount || 0,
       msgtype: 'sistem (generate pesan susulan, bukan pesan dari user)',
+      synthetic: true,
       custom_profile:
         func.tagReplacer(cfg.logic, { botfullname, botnickname }) +
         '\n- Tulis pesan chat yang natural, bukan template kaku.',
@@ -457,12 +561,22 @@ async function generateNgambekChat({ Exp, number, name, role, chatCount, kind = 
 
 async function handleTurn(s, utt) {
   s.busy = true;
+  const tm = { lastVoice: utt.last, detect: Date.now() }; // waktu suara terakhir & saat giliran terdeteksi selesai
   try {
     const wav = pcmToWav(concatF32(utt.chunks), SAMPLE_RATE);
     const t0 = Date.now();
-    const { text: rawText, engine } = await transcribeSmart(wav, { transcribe });
+    const { text: rawText, engine, failed } = await transcribeSmart(wav, { transcribe });
     const text = String(rawText || '').trim();
-    log(`STT[${engine}] ${Date.now() - t0}ms:`, JSON.stringify(text));
+    tm.stt = Date.now() - t0;
+    log(`STT[${engine}] ${tm.stt}ms:`, JSON.stringify(text));
+    if (failed) {
+      // STT gagal total (bukan sekadar sunyi): jangan kirim apa pun ke AI, minta ulang
+      if (Date.now() - (s.lastUnclear || 0) > 15000) {
+        s.lastUnclear = Date.now();
+        await say(s, 'Hah? Suaranya kurang jelas, ulangi dong sayang.').catch(() => {});
+      }
+      return;
+    }
     if (text.length < 2) return;
 
     // Hasil beraksara asing (Jepang/Cina/Korea/Arab/dll) hampir pasti salah tebak bahasa -> jangan dikirim ke AI
@@ -481,14 +595,32 @@ async function handleTurn(s, utt) {
       return;
     }
 
+    if (s.mode === 'bangun') {
+      const mins = parseSnooze(text);
+      if (mins) {
+        const r = snoozeWake(s.number, mins);
+        if (r > 0) {
+          await say(s, `Oke, ${r} menit lagi ya. Awas kalau tidur lagi.`).catch(() => {});
+          await finish(s);
+          return;
+        }
+        if (r < 0) {
+          await say(s, 'Sudah beberapa kali kamu tunda lho. Bangun sekarang ya sayang.').catch(() => {});
+          return;
+        }
+      }
+    }
+
+    const tAi = Date.now();
     const reply = await aiReply(s, text);
+    tm.ai = Date.now() - tAi;
     if (!reply) return;
-    await say(s, reply);
+    await say(s, reply, { tm });
   } catch (e) {
     console.error('[AICALL] turn error:', e?.message || e);
   } finally {
     s.busy = false;
-    s.utt = null;
+    // PATCH: s.utt tidak dihapus (ucapan yang masuk saat memproses tetap diproses di giliran berikut)
     s.lastActivity = Date.now();
   }
 }
@@ -570,14 +702,17 @@ function tickLoop(s) {
   const now = Date.now();
 
   if (s.mode !== 'test' && !s.busy && now >= s.speakingUntil) {
-    if (s.utt && (now - s.utt.last > SILENCE_MS || now - s.utt.start > MAX_UTTER_MS)) {
+    if (s.utt && (now - s.utt.last > tune().silenceMs || now - s.utt.start > MAX_UTTER_MS)) {
       const u = s.utt;
       s.utt = null;
       const voicedMs = u.voiced * ((FRAMES_PER_CHUNK / SAMPLE_RATE) * 1000);
-      if (voicedMs >= MIN_SPEECH_MS) {
+      const spanMs = u.last - u.start;
+      if (voicedMs >= MIN_VOICED_MS && spanMs >= MIN_SPEECH_MS) {
+        s.spoke = true; // user bersuara minimal sekali
+        if (u.duringBusy) log(`memproses ucapan yang ditangkap saat busy (bersuara ${Math.round(voicedMs)}ms, rentang ${Math.round(spanMs)}ms)`);
         handleTurn(s, u);
       } else {
-        log(`suara terlalu pendek (${Math.round(voicedMs)}ms), diabaikan`);
+        log(`suara terlalu pendek (bersuara ${Math.round(voicedMs)}ms, rentang ${Math.round(spanMs)}ms${u.duringBusy ? ', ditangkap saat busy' : ''}), diabaikan`);
       }
       return;
     }
@@ -678,6 +813,17 @@ async function startSession({ cht, Exp, target, number, self, mode }) {
     }
   });
 
+  // PATCH: 'ended' bisa terpicu SINKRON di dalam voip.call() (gagal setup), sebelum listener di atas terpasang.
+  // Tanpa cek ini bot menunggu sampai ring timeout lalu salah melapor "tidak diangkat".
+  if (call._ended) {
+    log('call sudah berakhir saat setup (offer tidak terkirim / tidak pernah berdering)');
+    s.endReason ??= 'gagal saat setup panggilan (offer tidak terkirim)';
+    s.endedAt ??= Date.now();
+    finish(s);
+    await s.done;
+    return s;
+  }
+
   s.ringTimer = setTimeout(() => {
     if (!s.connectedAt) {
       log('tidak diangkat');
@@ -722,7 +868,7 @@ export default async function on({ cht, Exp, ev, is }) {
       if (!isOwner && !isSuami) {
         return cht.reply('🔒 Fitur telpon cuma buat owner, 🤍Suami🤍, & nomor terdaftar.', { replyAi: false });
       }
-      const adminCmds = ['status', 'end', 'stop', 'reset', 'test', 'rate', 'vad', 'diag'];
+      const adminCmds = ['status', 'end', 'stop', 'reset', 'test', 'rate', 'vad', 'diag', 'silence'];
       if (!isOwner && adminCmds.includes(sub)) {
         return cht.reply('🔒 Perintah ini cuma buat owner.', { replyAi: false });
       }
@@ -734,7 +880,7 @@ export default async function on({ cht, Exp, ev, is }) {
             '.aicall <nomor> (owner: telpon nomor lain)\n' +
             '.aicall test [nomor] (rekam 10 detik suara lawan -> kirim VN)\n' +
             '.aicall end | status | reset\n' +
-            '.aicall rate <hz> | vad <rms>\n' +
+            '.aicall rate <hz> | vad <rms> | silence <ms>\n' +
             '.aicall diag <nomor> (cek nomor biasa/bisnis)\n' +
             '.aicall kangen (AI menelpon dengan nada kangen)\n' +
             '.bangunin 06.00-07.30 (AI chat lalu telpon berulang sampai kamu bangun)'
@@ -771,7 +917,9 @@ export default async function on({ cht, Exp, ev, is }) {
             `• VoIP     : ${Exp.voip ? '🟢 Ready' : '🔴 Tidak ada'}\n` +
             `• Sesi     : ${S.v ? `📞 ${S.v.mode} → ${S.v.number}` : '📴 Tidak ada'}\n` +
             `• Rate     : ${SAMPLE_RATE} Hz\n` +
-            `• VAD RMS  : ${VAD_RMS}`
+            `• VAD RMS  : ${VAD_RMS}\n` +
+            `• Diam     : ${tune().silenceMs} ms\n` +
+            `• Reasoning: ${tune().reasoning || '(default model)'} | riwayat ${tune().historyLimit} pesan | TTS ${tune().ttsSpeed}x | pecah TTS ${tune().chunkTts ? 'ON' : 'off'}`
         );
       }
 
@@ -801,6 +949,15 @@ export default async function on({ cht, Exp, ev, is }) {
         if (!v || v < 8000 || v > 96000) return cht.reply('Contoh: .aicall rate 16000');
         SAMPLE_RATE = v;
         return cht.reply(`✅ Rate audio masuk = ${v} Hz`);
+      }
+
+      if (sub === 'silence') {
+        const v = parseInt(parts[1], 10);
+        if (!v || v < 300 || v > 2500) {
+          return cht.reply(`Contoh: .aicall silence 700 (sekarang ${tune().silenceMs} ms, rentang 300-2500)`);
+        }
+        globalThis.__aicallTune = { ...(globalThis.__aicallTune || {}), silenceMs: v };
+        return cht.reply(`✅ Diam ${v} ms = giliran selesai (sampai bot restart; permanen: cfg.call_tune.silenceMs)`);
       }
 
       if (sub === 'vad') {
@@ -952,9 +1109,10 @@ export default async function on({ cht, Exp, ev, is }) {
       tag: 'ai',
       energy: 0,
     },
-    async ({ args, via }) => {
+    async ({ args, cht: evCht }) => {
       const isOwner = !!is?.owner;
-      const viaAi = via === 'ai';
+      // ev.emit() hanya meneruskan {media,urls,args,cht,...}; penanda "dari obrolan AI" dititipkan di cht.wakeVia
+      const viaAi = (evCht?.wakeVia ?? cht?.wakeVia) === 'ai';
       let allowed = isOwner || /suami/i.test(cht?.memories?.role?.split(',')[0] || '');
       let me = '';
       try {
@@ -987,6 +1145,7 @@ export default async function on({ cht, Exp, ev, is }) {
             '.bangunin 06.00-07.30 tiap hari\n' +
             '.bangunin 06.30 (jendela default 60 menit)\n' +
             '.bangunin status | off\n' +
+            '.bangunin snooze 10 (tunda; bisa juga ketik/ucap "5 menit lagi")\n' +
             '(owner) .bangunin 628xxx 06.00-07.30\n\n' +
             'Alur: chat "bangun" -> beberapa detik -> telpon. Kalau tidak diangkat, telpon lagi dengan jeda makin lama. ' +
             'Berhenti kalau telpon diangkat, kamu chat apa saja, atau jam batas habis.',
@@ -1003,6 +1162,13 @@ export default async function on({ cht, Exp, ev, is }) {
         return cht.reply('⏰ Jadwal bangunin dibatalkan.', { replyAi: false });
       }
 
+      const snz = parseSnooze(text);
+      if (snz) {
+        const r = snoozeWake(uid, snz);
+        if (r > 0) return cht.reply(`⏰ Oke, ditunda ${r} menit. Aku telpon lagi nanti.`, { replyAi: false });
+        if (r < 0) return cht.reply('⏰ Batas tunda sudah habis, bangun sekarang ya 😤', { replyAi: false });
+        return cht.reply('⏰ Tidak ada sesi bangunin yang sedang berjalan.', { replyAi: false });
+      }
       const p = parseWake(text);
       if (!p) {
         return cht.reply('❓ Jamnya belum kebaca. Contoh: .bangunin 06.00-07.30', { replyAi: false });
@@ -1054,7 +1220,7 @@ const FALLBACK_TEXTS = {
     'Hei... aku kangen. Pengen denger suara kamu deh.',
   ],
   bangun: [
-    'Bangun sayang... sudah pagi nih.',
+    'Bangun sayang... sudah waktunya bangun nih.',
     'Sayang, bangun yuk. Aku telpon sebentar lagi ya.',
     'Hei tukang tidur, bangun. Awas kalau telponku nggak diangkat.',
   ],
@@ -1274,10 +1440,21 @@ const cfgWake = () => {
     chatDelaySec: cd.length >= 2 ? [cd[0], cd[1]] : [5, 10],
     chatEvery: c.chatEvery === undefined || !(Number(c.chatEvery) >= 0) ? 3 : Number(c.chatEvery),
     checkEverySec: Math.max(10, num(c.checkEverySec, 30)),
+    snoozeDefaultMin: num(c.snoozeDefaultMin, 5),
+    snoozeMaxMin: num(c.snoozeMaxMin, 30),
+    maxSnooze: num(c.maxSnooze, 3),
     failRetrySec: num(c.failRetrySec, 90),
   };
 };
 
+/** "jam 15.20 (sore)" menurut zona waktu bot — dipakai supaya AI tidak bilang "pagi" di sore hari. */
+function dayNow() {
+  const p = zoneParts(Date.now(), wakeTz());
+  const h = p.hour;
+  const part = h >= 4 && h < 11 ? 'pagi' : h < 15 ? 'siang' : h < 18 ? 'sore' : h < 24 ? 'malam' : 'dini hari';
+  const label = h < 4 ? 'dini hari' : part;
+  return `jam ${String(h).padStart(2, '0')}.${String(p.minute).padStart(2, '0')} (${label})`;
+}
 const wakeTz = () => wm.cfgWife().quietHours.tz || 'Asia/Jakarta';
 const fmtHM = (m) => `${String(Math.floor(m / 60)).padStart(2, '0')}.${String(m % 60).padStart(2, '0')}`;
 
@@ -1333,6 +1510,41 @@ function parseWake(text) {
   return { startMin, endMin, repeat };
 }
 
+/** "5 menit lagi", "lima menit lagi", "bentar lagi", "snooze 10" -> menit (0 = bukan snooze). */
+const NUM_WORDS = {
+  satu: 1, dua: 2, tiga: 3, empat: 4, lima: 5, enam: 6, tujuh: 7, delapan: 8, sembilan: 9, sepuluh: 10,
+  'lima belas': 15, 'dua puluh': 20, 'tiga puluh': 30, setengah: 30,
+};
+function parseSnooze(text) {
+  const t = String(text || '').toLowerCase().trim();
+  if (!t || t.length > 60) return 0; // pesan panjang = obrolan biasa, bukan snooze
+  const k = cfgWake();
+  const clamp = (n) => Math.min(k.snoozeMaxMin, Math.max(1, Math.round(n)));
+  const m = t.match(/\b(\d{1,2}|lima belas|dua puluh|tiga puluh|satu|dua|tiga|empat|lima|enam|tujuh|delapan|sembilan|sepuluh)\s*(?:menit|mnt|min)\b/);
+  const lagi = /\b(lagi|ntar|entar|nanti|bentar|sebentar|snooze|tunda)\b/.test(t);
+  if (m && lagi) return clamp(/^\d/.test(m[1]) ? Number(m[1]) : NUM_WORDS[m[1]]);
+  if (/\bsetengah jam\b/.test(t) && lagi) return clamp(30);
+  const sn = t.match(/\b(?:snooze|tunda)\s+(\d{1,2})\b/);
+  if (sn) return clamp(Number(sn[1]));
+  if (/\b(?:bentar|sebentar|bntar|ntar|entar)\s+lagi\b|\b(?:snooze|tunda)\b/.test(t)) return clamp(k.snoozeDefaultMin);
+  return 0;
+}
+
+/** Tunda telpon berikutnya. return: menit yang dipakai | -1 batas snooze habis | 0 tidak ada sesi berjalan. */
+function snoozeWake(uid, minutes) {
+  const wk = getWake(uid);
+  const k = cfgWake();
+  if (!wk?.on || wk.state !== 'run') return 0;
+  if ((wk.snoozes || 0) >= k.maxSnooze) return -1;
+  wk.snoozes = (wk.snoozes || 0) + 1;
+  wk.nextAt = Date.now() + minutes * 60000;
+  wk.endAt = Math.max(wk.endAt, wk.nextAt + 15 * 60000); // snooze diminta user: jendela ikut digeser supaya tidak habis duluan
+  wk.snoozeFlag = true; // runWakeAttempt jangan menimpa nextAt / menganggap selesai
+  wk.chatNext = true; // chat "bangun lagi" sebelum telpon berikutnya
+  log(`[WAKE] ${uid} snooze ${minutes} menit (${wk.snoozes}/${k.maxSnooze})`);
+  return minutes;
+}
+
 const getWake = (uid) => global.Data?.users?.[uid]?.wakeCall || null;
 
 function setWake(uid, p, { force = true } = {}) {
@@ -1341,20 +1553,23 @@ function setWake(uid, p, { force = true } = {}) {
   u.wakeCall = {
     on: true, force: !!force, startMin: p.startMin, endMin: p.endMin, repeat: !!p.repeat,
     ...buildWindow(p),
-    state: 'wait', calls: 0, chats: 0, fails: 0, nextAt: 0, startedAt: 0,
+    state: 'wait', calls: 0, chats: 0, fails: 0, snoozes: 0, snoozeFlag: false, chatNext: false, nextAt: 0, startedAt: 0,
     lastOutcome: null, doneReason: null, doneAt: 0,
   };
   return u.wakeCall;
 }
 
+const clearWakeMemory = (uid) => globalThis.__aiChatMemory?.delete(`aicall-bangun:${uid}`);
+
 function endWake(uid, reason) {
+  clearWakeMemory(uid);
   const wk = getWake(uid);
   if (!wk) return;
   wk.doneReason = reason;
   wk.doneAt = Date.now();
   if (wk.repeat) {
     Object.assign(wk, buildWindow(wk, Date.now(), true), {
-      state: 'wait', calls: 0, chats: 0, fails: 0, nextAt: 0, startedAt: 0,
+      state: 'wait', calls: 0, chats: 0, fails: 0, snoozes: 0, snoozeFlag: false, chatNext: false, nextAt: 0, startedAt: 0,
     });
   } else {
     wk.on = false;
@@ -1389,7 +1604,7 @@ function wakeWindowText(wk) {
 }
 
 const WAKE_REASON = {
-  diangkat: 'telpon diangkat', chat: 'kamu sudah chat', habis: 'jam batas habis',
+  diangkat: 'telpon diangkat & kamu bicara', chat: 'kamu sudah chat', habis: 'jam batas habis',
   batas: 'batas jumlah telpon tercapai', terlewat: 'jadwal terlewat (bot sedang mati)', batal: 'dibatalkan',
 };
 
@@ -1433,15 +1648,19 @@ async function runWakeAttempt(E, uid, wk) {
   wk.calls++;
 
   // chat dulu: sebelum telpon pertama, dan susulan tiap `chatEvery` telpon
-  const needChat = wk.chats === 0 || (k.chatEvery > 0 && wk.calls > 1 && (wk.calls - 1) % k.chatEvery === 0);
+  const needChat = wk.chatNext || wk.chats === 0 || (k.chatEvery > 0 && wk.calls > 1 && (wk.calls - 1) % k.chatEvery === 0);
+  wk.snoozeFlag = false;
   if (needChat) {
+    wk.chatNext = false;
     wk.chats++;
     await sendWakeChat(E, uid, wk.calls, sulk).catch((e) => console.error('[WAKE] chat:', e?.message || e));
     const [a, b] = k.chatDelaySec;
     await sleep((a + Math.random() * (b - a)) * 1000);
     if (wk.state !== 'run') return; // dia keburu chat balik
+    if (wk.snoozeFlag) { wk.snoozeFlag = false; wk.lastOutcome = 'snooze'; return; } // dia minta ditunda sebelum telpon
   }
 
+  clearWakeMemory(uid); // tiap telpon bangunin mulai dari percakapan kosong
   const target = await resolveCallTarget(E, `${uid}@s.whatsapp.net`);
   log(`[WAKE] telpon ke-${wk.calls}/${k.maxCalls} → ${uid}`);
   const fakeCht = {
@@ -1456,9 +1675,11 @@ async function runWakeAttempt(E, uid, wk) {
   globalThis.__wifeCalling = true;
   clearStaleFeeder(E.voip);
   let outcome = 'failed';
+  let spoke = false;
   try {
     const s = await startSession({ cht: fakeCht, Exp: E, target, number: uid, self: true, mode: 'bangun' });
     outcome = classifyCall(s);
+    spoke = !!s?.spoke;
   } catch (e) {
     console.error('[WAKE] call error:', e?.message || e);
   } finally {
@@ -1468,7 +1689,20 @@ async function runWakeAttempt(E, uid, wk) {
   log(`[WAKE] hasil → ${outcome}`);
 
   if (wk.state !== 'run') return; // selesai selagi telpon (dia chat / dibatalkan)
-  if (outcome === 'answered') return endWake(uid, 'diangkat');
+  if (wk.snoozeFlag) { // snooze lewat suara / chat selama telpon: nextAt sudah diatur snoozeWake
+    wk.snoozeFlag = false;
+    wk.lastOutcome = 'snooze';
+    return;
+  }
+  if (outcome === 'answered' && spoke) return endWake(uid, 'diangkat');
+  if (outcome === 'answered') {
+    // diangkat tapi tidak ada suara sama sekali (HP di saku / auto-angkat / tidur lagi) -> belum dianggap bangun
+    wk.lastOutcome = 'silent';
+    wk.fails = 0;
+    log(`[WAKE] ${uid} diangkat tapi tidak bicara, dianggap belum bangun`);
+    wk.nextAt = Date.now() + gapMs(wk.calls);
+    return;
+  }
   if (outcome === 'failed') {
     wk.calls = Math.max(0, wk.calls - 1); // gagal teknis tidak dihitung
     wk.fails = (wk.fails || 0) + 1;
@@ -1491,7 +1725,7 @@ async function wakeTick() {
       if (wk.state === 'wait') {
         if (now < wk.startAt) continue;
         if (now >= wk.endAt) { endWake(uid, 'terlewat'); continue; }
-        Object.assign(wk, { state: 'run', startedAt: now, calls: 0, chats: 0, fails: 0, nextAt: now });
+        Object.assign(wk, { state: 'run', startedAt: now, calls: 0, chats: 0, fails: 0, snoozes: 0, snoozeFlag: false, chatNext: false, nextAt: now });
         log(`[WAKE] mulai membangunkan ${uid}`);
       }
       if (wk.state !== 'run') continue;
@@ -1522,10 +1756,20 @@ function startWakeTicker(Exp) {
 }
 
 /** Dipanggil client.js tiap user chat: dia sudah bangun -> stop chat/telpon susulan. */
-function wakeSeen(userId) {
+function wakeSeen(userId, text = '') {
   const uid = wm.uidOf(userId);
   const wk = getWake(uid);
   if (!wk?.on || wk.state !== 'run') return false;
+  const mins = parseSnooze(text);
+  if (mins) {
+    const r = snoozeWake(uid, mins);
+    if (r > 0) {
+      if (S.v?.mode === 'bangun' && S.v.number === uid && !S.v.connectedAt) finish(S.v); // telpon yang berdering ditutup
+      sendChatAsBot(globalThis.__wifeExp, `${uid}@s.whatsapp.net`, `Oke, ${r} menit lagi ya. Awas tidur lagi.`);
+      return true;
+    }
+    if (r < 0) return false; // batas snooze habis: chat ini tidak mengakhiri sesi, telpon lanjut
+  }
   endWake(uid, 'chat');
   if (S.v?.mode === 'bangun' && S.v.number === uid && !S.v.connectedAt) finish(S.v); // tutup telpon yang masih berdering
   return true;
