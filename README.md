@@ -31,7 +31,7 @@ toolkit/set/config.json
   "botname": "Waguri AI",
   "botnickname": "Waguri",
   "botfullname": "Waguri Kaoruko",
-  "ownername": "rifza",
+  "ownername": "Wibu Karbit",
   "locale": "id",
   "cfg": {
     "public": true,
