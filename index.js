@@ -96,6 +96,29 @@ let Func = new func({ store });
 let Exp, Detector;
 let voip;
 
+// PATCH: akun WA Business punya device "hosted" (:99@hosted.lid). Library mengubahnya jadi ":99@s.whatsapp.net"
+// (JID tidak valid) -> startCall gagal seketika & tidak pernah berdering. Device hosted dibuang dari daftar peer;
+// HP utama (device 0) dan device biasa tetap dipakai. Dipasang sebagai override instance (tanpa edit node_modules).
+function patchVoipHosted(v) {
+  const sig = v?._signaling;
+  if (!sig || sig.__hostedPatched) return;
+  const orig = sig._normalizeStartCallPeerList;
+  if (typeof orig !== 'function') return;
+  sig._normalizeStartCallPeerList = (jids) => {
+    const list = Array.isArray(jids) ? jids : [];
+    const isHosted = (j) => /@hosted(\.lid)?$/.test(String(j || '')) || /:99@/.test(String(j || ''));
+    const removed = list.filter(isHosted);
+    let kept = list.filter((j) => !isHosted(j));
+    if (removed.length) console.log('[VOIP-FIX] device hosted dibuang dari peer list:', removed);
+    if (!kept.length && list.length) {
+      const user = String(list[0]).split('@')[0].split(':')[0];
+      if (user) kept = [`${user}:0@lid`];
+    }
+    return orig.call(sig, kept);
+  };
+  sig.__hostedPatched = true;
+}
+
 global.debug = process.argv.includes('debug') || process.argv.includes('--debug');
 
 if (global.debug) {
@@ -245,6 +268,7 @@ async function launch() {
             voip = new VoipClient({ socket: Exp });
 
             await voip.connect();
+            patchVoipHosted(voip);
             restoreNative()
             
             Exp.voip = voip;
@@ -261,8 +285,9 @@ async function launch() {
             }
           } else {
             await voip.attach(Exp);
+            patchVoipHosted(voip);
             restoreNative()
-            globalThis.__wifeExp = Exp; // scheduler wife-call ikut socket terbaru
+            globalThis.__wifeExp = Exp;
           }
         } catch (e) {
         console.error('[VOIP] Attach failed:', e);
