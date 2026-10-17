@@ -11,7 +11,6 @@
   */
 /*!-======[ Preparing Configuration ]======-!*/
 import './toolkit/set/prototype.js';
-import crmstore from './machine/crmstore.js';
 
 /* Kasih WM di bot yang bener aja lah mas masa di file Enkripsi🗿*/
 String.prototype.wm = function () {
@@ -496,7 +495,6 @@ async function launch() {
       }
     });
     store.bind(Exp.ev);
-    crmstore.bind(Exp);
   } catch (error) {
     console.error(error);
   }
