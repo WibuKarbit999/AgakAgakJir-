@@ -11,6 +11,7 @@
   */
 /*!-======[ Preparing Configuration ]======-!*/
 import './toolkit/set/prototype.js';
+import crmstore from './machine/crmstore.js';
 
 /* Kasih WM di bot yang bener aja lah mas masa di file Enkripsi🗿*/
 String.prototype.wm = function () {
@@ -23,19 +24,6 @@ globalThis.restoreNative = () => {
   Object.entries = _native.entries;
   JSON.stringify = _native.stringify;
 };
-
-/*
-if (typeof [].removeDuplicate !== 'function') {
-  Array.prototype.removeDuplicate = function () {
-    return [...new Set(this)];
-  };
-}
-
-if (typeof [].clean !== 'function') {
-  Array.prototype.clean = function () {
-    return this.filter(Boolean);
-  };
-}*/
 
 let { initialize } = await './toolkit/set/global.js'.r();
 
@@ -51,18 +39,6 @@ const { Connecting } = await `${fol[8]}systemConnext.js`.r();
 const Event = (await 'events'.import()).default;
 let { makeInMemoryStore } = await `${fol[0]}store.js`.r();
 let { func } = await `${fol[0]}func.js`.r();
-
-/*console.log(
-  'PROTO:',
-  typeof [].removeDuplicate,
-  typeof [].clean
-);
-
-console.log(
-  'EVENT:',
-  typeof Object.values(Data.events).map(a => a?.tag).removeDuplicate,
-  typeof Object.values(Data.events).map(a => a?.tag).clean
-);*/
 
 Event.defaultMaxListeners = 25;
 
@@ -287,6 +263,7 @@ async function launch() {
             patchVoipHosted(voip);
             restoreNative()
             globalThis.__wifeExp = Exp;
+            Exp.voip = voip;
           }
         } catch (e) {
         console.error('[VOIP] Attach failed:', e);
@@ -519,6 +496,7 @@ async function launch() {
       }
     });
     store.bind(Exp.ev);
+    crmstore.bind(Exp);
   } catch (error) {
     console.error(error);
   }
